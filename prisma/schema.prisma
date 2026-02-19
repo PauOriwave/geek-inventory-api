@@ -1,0 +1,27 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Category {
+  videogame
+  book
+  comic
+  tcg
+  figure
+  other
+}
+
+model Item {
+  id             String   @id @default(uuid())
+  name           String
+  category       Category
+  estimatedPrice Decimal
+  quantity       Int      @default(1)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
