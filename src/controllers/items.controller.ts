@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { createItemSchema } from "../validators/item.schema";
 import { createItemService, listItemsService } from "../services/items.service";
+import { deleteItemService } from "../services/items.service";
 
 export const createItem = async (req: Request, res: Response) => {
   const parsed = createItemSchema.safeParse(req.body);
@@ -19,4 +20,16 @@ export const createItem = async (req: Request, res: Response) => {
 export const listItems = async (_req: Request, res: Response) => {
   const items = await listItemsService();
   return res.json(items);
+};
+
+export const deleteItem = async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const deleted = await deleteItemService(id);
+
+  if (!deleted) {
+    return res.status(404).json({ message: "Item not found" });
+  }
+
+  return res.status(204).send();
 };

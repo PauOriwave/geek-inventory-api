@@ -25,3 +25,11 @@ export const listItemsService = async () => {
     orderBy: { createdAt: "desc" }
   });
 };
+
+export const deleteItemService = async (id: string) => {
+  const existing = await prisma.item.findUnique({ where: { id } });
+  if (!existing) return null;
+
+  await prisma.item.delete({ where: { id } });
+  return existing;
+};
