@@ -6,10 +6,37 @@ import { updateItemSchema } from "../validators/itemUpdate.schema";
 /**
  * GET /items
  */
-export const listItems = async (_req: Request, res: Response) => {
-  const items = await prisma.item.findMany({
-    orderBy: { createdAt: "desc" }
-  });
+export const listItems = async (req: Request, res: Response) => {
+  const q = typeof req.query.q === "string" ? req.query.q : undefined;
+  const category = typeof req.query.category === "string" ? req.query.category : undefined;
+
+  const minPrice = typeof req.query.minPrice === "string" ? Number(req.query.minPrice) : undefined;
+  const maxPrice = typeof req.query.maxPrice === "string" ? Number(req.query.maxPrice) : undefined;
+
+  const sort = typeof req.query.sort === "string" ? req.query.sort : "newest";
+
+  const where: any = {};
+
+  if (q) {
+    where.name = { contains: q, mode: "insensitive" };
+  }
+
+  if (category) {
+    where.category = category;
+  }
+
+  if (!Number.isNaN(minPrice ?? NaN) || !Number.isNaN(maxPrice ?? NaN)) {
+    where.estimatedPrice = {};
+    if (typeof minPrice === "number" && !Number.isNaN(minPrice)) where.estimatedPrice.gte = minPrice;
+    if (typeof maxPrice === "number" && !Number.isNaN(maxPrice)) where.estimatedPrice.lte = maxPrice;
+  }
+
+  const orderBy =
+    sort === "price_asc" ? { estimatedPrice: "asc" } :
+    sort === "price_desc" ? { estimatedPrice: "desc" } :
+    { createdAt: "desc" };
+
+  const items = await prisma.item.findMany({ where, orderBy });
 
   return res.json(items);
 };
