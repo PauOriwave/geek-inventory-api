@@ -1,4 +1,5 @@
 import prisma from "../prisma/client";
+import { Prisma } from "@prisma/client";
 
 type Category = "videogame" | "book" | "comic" | "tcg" | "figure" | "other";
 
@@ -32,4 +33,11 @@ export const deleteItemService = async (id: string) => {
 
   await prisma.item.delete({ where: { id } });
   return existing;
+};
+
+export const updateItemService = async (id: string, data: Prisma.ItemUpdateInput) => {
+  return prisma.item.update({
+    where: { id },
+    data
+  });
 };
