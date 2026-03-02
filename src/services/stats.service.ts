@@ -11,3 +11,26 @@ export const getSummaryService = async () => {
 
   return { totalItems, totalUnits, totalValue };
 };
+
+export type ByCategoryRow = {
+  category: string;
+  units: number;
+  value: number;
+  items: number;
+};
+
+export async function getByCategory(): Promise<ByCategoryRow[]> {
+  // OJO: "Item" debe coincidir con tu tabla real. Con Prisma normalmente es "Item".
+  const rows = await prisma.$queryRaw<ByCategoryRow[]>`
+    SELECT
+      "category"::text AS "category",
+      COALESCE(SUM("quantity"), 0)::int AS "units",
+      COALESCE(SUM(("estimatedPrice"::numeric) * ("quantity"::numeric)), 0)::float AS "value",
+      COUNT(*)::int AS "items"
+    FROM "Item"
+    GROUP BY "category"
+    ORDER BY "value" DESC;
+  `;
+
+  return rows;
+}

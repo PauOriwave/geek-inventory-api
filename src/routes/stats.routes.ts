@@ -1,8 +1,9 @@
 import { Router } from "express";
-import { getSummary } from "../controllers/stats.controller";
+import { statsSummary, statsByCategory } from "../controllers/stats.controller";
 
 const router = Router();
 
-router.get("/summary", getSummary);
+router.get("/summary", statsSummary);
+router.get("/by-category", statsByCategory);
 
 export default router;

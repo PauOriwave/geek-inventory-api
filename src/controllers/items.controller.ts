@@ -15,15 +15,14 @@ export const listItems = async (req: Request, res: Response) => {
 
   const sort = typeof req.query.sort === "string" ? req.query.sort : "newest";
 
+  const page = typeof req.query.page === "string" ? Math.max(1, Number(req.query.page)) : 1;
+  const pageSizeRaw = typeof req.query.pageSize === "string" ? Number(req.query.pageSize) : 25;
+  const pageSize = Math.min(100, Math.max(5, Number.isFinite(pageSizeRaw) ? pageSizeRaw : 25));
+
   const where: any = {};
 
-  if (q) {
-    where.name = { contains: q, mode: "insensitive" };
-  }
-
-  if (category) {
-    where.category = category;
-  }
+  if (q) where.name = { contains: q, mode: "insensitive" };
+  if (category) where.category = category;
 
   if (!Number.isNaN(minPrice ?? NaN) || !Number.isNaN(maxPrice ?? NaN)) {
     where.estimatedPrice = {};
@@ -36,9 +35,17 @@ export const listItems = async (req: Request, res: Response) => {
     sort === "price_desc" ? { estimatedPrice: "desc" } :
     { createdAt: "desc" };
 
-  const items = await prisma.item.findMany({ where, orderBy });
+  const [total, items] = await Promise.all([
+    prisma.item.count({ where }),
+    prisma.item.findMany({
+      where,
+      orderBy,
+      skip: (page - 1) * pageSize,
+      take: pageSize
+    })
+  ]);
 
-  return res.json(items);
+  return res.json({ items, total, page, pageSize });
 };
 
 /**
