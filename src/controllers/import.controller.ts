@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { importItemsFromCsvService } from "../services/import.service";
+import { importItemsFromCsv } from "../services/import.service";
 
 export const importItemsCsv = async (req: Request, res: Response) => {
   if (!req.file) {
