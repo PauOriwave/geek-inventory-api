@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import prisma from "../prisma/client";
 import { getByCategory } from "../services/stats.service";
-
+  
 // GET /stats/summary
 export const statsSummary = async (req: Request, res: Response) => {
   const q = typeof req.query.q === "string" ? req.query.q : undefined;
