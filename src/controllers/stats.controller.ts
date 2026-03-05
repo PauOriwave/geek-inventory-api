@@ -1,8 +1,8 @@
 import { Request, Response } from "express";
 import prisma from "../prisma/client";
-import { getByCategory } from "../services/stats.service";
-  
-// GET /stats/summary
+import { getByCategory, getTopItems } from "../services/stats.service";
+
+// GET /stats/summary  (filtrable por q/category/minPrice/maxPrice)
 export const statsSummary = async (req: Request, res: Response) => {
   const q = typeof req.query.q === "string" ? req.query.q : undefined;
   const category = typeof req.query.category === "string" ? req.query.category : undefined;
@@ -25,7 +25,10 @@ export const statsSummary = async (req: Request, res: Response) => {
 
   const totalItems = items.length;
   const totalUnits = items.reduce((acc, i) => acc + i.quantity, 0);
-  const totalValue = items.reduce((acc, i) => acc + Number(i.estimatedPrice) * i.quantity, 0);
+  const totalValue = items.reduce(
+    (acc, i) => acc + Number(i.estimatedPrice) * i.quantity,
+    0
+  );
 
   res.json({ totalItems, totalUnits, totalValue });
 };
@@ -33,5 +36,12 @@ export const statsSummary = async (req: Request, res: Response) => {
 // GET /stats/by-category
 export const statsByCategory = async (_req: Request, res: Response) => {
   const data = await getByCategory();
+  res.json(data);
+};
+
+// GET /stats/top-items?limit=10
+export const statsTopItems = async (req: Request, res: Response) => {
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : 10;
+  const data = await getTopItems(Number.isFinite(limit) ? limit : 10);
   res.json(data);
 };

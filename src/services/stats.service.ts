@@ -34,3 +34,31 @@ export async function getByCategory(): Promise<ByCategoryRow[]> {
 
   return rows;
 }
+
+export type TopItemRow = {
+  id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  estimatedPrice: number;
+  totalValue: number;
+};
+
+export async function getTopItems(limit = 10): Promise<TopItemRow[]> {
+  const safeLimit = Math.min(50, Math.max(1, limit));
+
+  const rows = await prisma.$queryRaw<TopItemRow[]>`
+    SELECT
+      "id"::text AS "id",
+      "name"::text AS "name",
+      "category"::text AS "category",
+      "quantity"::int AS "quantity",
+      ("estimatedPrice"::numeric)::float AS "estimatedPrice",
+      (("estimatedPrice"::numeric) * ("quantity"::numeric))::float AS "totalValue"
+    FROM "Item"
+    ORDER BY (("estimatedPrice"::numeric) * ("quantity"::numeric)) DESC
+    LIMIT ${safeLimit};
+  `;
+
+  return rows;
+}
