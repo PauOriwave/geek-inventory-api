@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import prisma from "../prisma/client";
 import { itemSchema } from "../validators/item.schema";
 import { updateItemSchema } from "../validators/itemUpdate.schema";
+import { getItemByIdService } from "../services/items.service";
 
 /**
  * GET /items
@@ -46,6 +47,18 @@ export const listItems = async (req: Request, res: Response) => {
   ]);
 
   return res.json({ items, total, page, pageSize });
+};
+
+export const getItemById = async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+
+  const item = await getItemByIdService(id);
+
+  if (!item) {
+    return res.status(404).json({ message: "Item not found" });
+  }
+
+  return res.json(item);
 };
 
 /**

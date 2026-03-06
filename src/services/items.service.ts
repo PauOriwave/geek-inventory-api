@@ -27,6 +27,12 @@ export const listItemsService = async () => {
   });
 };
 
+export const getItemByIdService = async (id: string) => {
+  return prisma.item.findUnique({
+    where: { id }
+  });
+};
+
 export const deleteItemService = async (id: string) => {
   const existing = await prisma.item.findUnique({ where: { id } });
   if (!existing) return null;
