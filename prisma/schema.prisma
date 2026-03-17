@@ -15,13 +15,24 @@ enum Category {
   other
 }
 
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  items        Item[]
+}
+
 model Item {
   id             String   @id @default(uuid())
   name           String
-  category       Category
+  category       String
   estimatedPrice Decimal
-  quantity       Int      @default(1)
-
+  quantity       Int
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

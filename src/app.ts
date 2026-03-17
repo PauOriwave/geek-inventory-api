@@ -4,6 +4,8 @@ import statsRoutes from "./routes/stats.routes";
 import cors from "cors";
 import express from "express";
 import exportRoutes from "./routes/export.routes";
+import cookieParser from "cookie-parser";
+import authRoutes from "./auth/auth.routes";
 
 const app = express();
 console.log("🚀 BOOT APP", new Date().toISOString());
@@ -14,6 +16,8 @@ app.use("/items", itemRoutes);
 app.use("/import", importRoutes);
 app.use("/export", exportRoutes);
 app.use("/stats", statsRoutes);
+app.use(cookieParser());
+app.use("/auth", authRoutes);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
