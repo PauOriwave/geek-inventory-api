@@ -1,58 +1,75 @@
 import { Request, Response } from "express";
-import prisma from "../prisma/client";
-import { itemSchema } from "../validators/item.schema";
-import { updateItemSchema } from "../validators/itemUpdate.schema";
-import { getItemByIdService } from "../services/items.service";
+import {
+  listItemsService,
+  createItemService,
+  getItemByIdService,
+  updateItemService,
+  deleteItemService
+} from "../services/items.service";
 
-/**
- * GET /items
- */
 export const listItems = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
   const q = typeof req.query.q === "string" ? req.query.q : undefined;
-  const category = typeof req.query.category === "string" ? req.query.category : undefined;
+  const category =
+    typeof req.query.category === "string" ? req.query.category : undefined;
+  const sort = typeof req.query.sort === "string" ? req.query.sort : undefined;
 
-  const minPrice = typeof req.query.minPrice === "string" ? Number(req.query.minPrice) : undefined;
-  const maxPrice = typeof req.query.maxPrice === "string" ? Number(req.query.maxPrice) : undefined;
+  const minPrice =
+    typeof req.query.minPrice === "string"
+      ? Number(req.query.minPrice)
+      : undefined;
 
-  const sort = typeof req.query.sort === "string" ? req.query.sort : "newest";
+  const maxPrice =
+    typeof req.query.maxPrice === "string"
+      ? Number(req.query.maxPrice)
+      : undefined;
 
-  const page = typeof req.query.page === "string" ? Math.max(1, Number(req.query.page)) : 1;
-  const pageSizeRaw = typeof req.query.pageSize === "string" ? Number(req.query.pageSize) : 25;
-  const pageSize = Math.min(100, Math.max(5, Number.isFinite(pageSizeRaw) ? pageSizeRaw : 25));
+  const page =
+    typeof req.query.page === "string" ? Number(req.query.page) : 1;
 
-  const where: any = {};
+  const pageSize =
+    typeof req.query.pageSize === "string" ? Number(req.query.pageSize) : 25;
 
-  if (q) where.name = { contains: q, mode: "insensitive" };
-  if (category) where.category = category;
+  const result = await listItemsService({
+    userId,
+    q,
+    category,
+    sort,
+    minPrice,
+    maxPrice,
+    page,
+    pageSize
+  });
 
-  if (!Number.isNaN(minPrice ?? NaN) || !Number.isNaN(maxPrice ?? NaN)) {
-    where.estimatedPrice = {};
-    if (typeof minPrice === "number" && !Number.isNaN(minPrice)) where.estimatedPrice.gte = minPrice;
-    if (typeof maxPrice === "number" && !Number.isNaN(maxPrice)) where.estimatedPrice.lte = maxPrice;
-  }
+  res.json(result);
+};
 
-  const orderBy =
-    sort === "price_asc" ? { estimatedPrice: "asc" } :
-    sort === "price_desc" ? { estimatedPrice: "desc" } :
-    { createdAt: "desc" };
+export const createItem = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
-  const [total, items] = await Promise.all([
-    prisma.item.count({ where }),
-    prisma.item.findMany({
-      where,
-      orderBy,
-      skip: (page - 1) * pageSize,
-      take: pageSize
-    })
-  ]);
+  const { name, category, estimatedPrice, quantity } = req.body;
 
-  return res.json({ items, total, page, pageSize });
+  const item = await createItemService({
+    userId,
+    name,
+    category,
+    estimatedPrice: Number(estimatedPrice),
+    quantity: Number(quantity)
+  });
+
+  res.status(201).json(item);
 };
 
 export const getItemById = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
   const id = String(req.params.id);
 
-  const item = await getItemByIdService(id);
+  const item = await getItemByIdService(userId, id);
 
   if (!item) {
     return res.status(404).json({ message: "Item not found" });
@@ -61,63 +78,44 @@ export const getItemById = async (req: Request, res: Response) => {
   return res.json(item);
 };
 
-/**
- * POST /items
- */
-export const createItem = async (req: Request, res: Response) => {
-  const parsed = itemSchema.safeParse(req.body);
+export const updateItem = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
-  if (!parsed.success) {
-    return res.status(400).json({
-      message: "Validation error",
-      errors: parsed.error.flatten()
-    });
-  }
+  const id = String(req.params.id);
+  const { quantity, estimatedPrice } = req.body;
 
-  const item = await prisma.item.create({
-    data: parsed.data
+  const item = await updateItemService({
+    userId,
+    id,
+    quantity:
+      typeof quantity === "number" ? quantity : quantity !== undefined ? Number(quantity) : undefined,
+    estimatedPrice:
+      typeof estimatedPrice === "number"
+        ? estimatedPrice
+        : estimatedPrice !== undefined
+          ? Number(estimatedPrice)
+          : undefined
   });
 
-  return res.status(201).json(item);
-};
-
-/**
- * PATCH /items/:id
- */
-export const updateItem = async (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  const parsed = updateItemSchema.safeParse(req.body);
-
-  if (!parsed.success) {
-    return res.status(400).json({
-      message: "Validation error",
-      errors: parsed.error.flatten()
-    });
-  }
-
-  try {
-    const updated = await prisma.item.update({
-      where: { id },
-      data: parsed.data
-    });
-
-    return res.json(updated);
-  } catch {
+  if (!item) {
     return res.status(404).json({ message: "Item not found" });
   }
+
+  res.json(item);
 };
 
-/**
- * DELETE /items/:id
- */
 export const deleteItem = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
   const id = String(req.params.id);
 
-  try {
-    await prisma.item.delete({ where: { id } });
-    return res.status(204).send();
-  } catch {
+  const deleted = await deleteItemService(userId, id);
+
+  if (!deleted) {
     return res.status(404).json({ message: "Item not found" });
   }
+
+  res.status(204).send();
 };

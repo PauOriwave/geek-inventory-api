@@ -13,12 +13,11 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
     const payload = jwt.verify(token, JWT_SECRET) as { userId: string };
 
-    (req as any).user = {
+    req.user = {
       id: payload.userId
     };
 
     next();
-
   } catch {
     return res.status(401).json({ message: "Invalid session" });
   }

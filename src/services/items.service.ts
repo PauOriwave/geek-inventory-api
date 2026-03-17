@@ -1,49 +1,162 @@
 import prisma from "../prisma/client";
-import { Prisma } from "@prisma/client";
 
-type Category = "videogame" | "book" | "comic" | "tcg" | "figure" | "other";
+type ListItemsParams = {
+  userId: string;
+  q?: string;
+  category?: string;
+  sort?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  page?: number;
+  pageSize?: number;
+};
 
-export type CreateItemInput = {
+type CreateItemParams = {
+  userId: string;
   name: string;
-  category: Category;
+  category: string;
   estimatedPrice: number;
   quantity: number;
 };
 
-export const createItemService = async (data: CreateItemInput) => {
+type UpdateItemParams = {
+  userId: string;
+  id: string;
+  quantity?: number;
+  estimatedPrice?: number;
+};
+
+export const listItemsService = async ({
+  userId,
+  q,
+  category,
+  sort,
+  minPrice,
+  maxPrice,
+  page = 1,
+  pageSize = 25
+}: ListItemsParams) => {
+  const where: any = {
+    userId
+  };
+
+  if (q) {
+    where.name = {
+      contains: q,
+      mode: "insensitive"
+    };
+  }
+
+  if (category) {
+    where.category = category;
+  }
+
+  if (
+    (typeof minPrice === "number" && !Number.isNaN(minPrice)) ||
+    (typeof maxPrice === "number" && !Number.isNaN(maxPrice))
+  ) {
+    where.estimatedPrice = {};
+
+    if (typeof minPrice === "number" && !Number.isNaN(minPrice)) {
+      where.estimatedPrice.gte = minPrice;
+    }
+
+    if (typeof maxPrice === "number" && !Number.isNaN(maxPrice)) {
+      where.estimatedPrice.lte = maxPrice;
+    }
+  }
+
+  let orderBy: any = { createdAt: "desc" };
+
+  if (sort === "price_desc") {
+    orderBy = { estimatedPrice: "desc" };
+  }
+
+  if (sort === "price_asc") {
+    orderBy = { estimatedPrice: "asc" };
+  }
+
+  const total = await prisma.item.count({ where });
+
+  const items = await prisma.item.findMany({
+    where,
+    orderBy,
+    skip: (page - 1) * pageSize,
+    take: pageSize
+  });
+
+  return {
+    items,
+    total,
+    page,
+    pageSize
+  };
+};
+
+export const createItemService = async ({
+  userId,
+  name,
+  category,
+  estimatedPrice,
+  quantity
+}: CreateItemParams) => {
   return prisma.item.create({
     data: {
-      name: data.name,
-      category: data.category,
-      estimatedPrice: data.estimatedPrice,
-      quantity: data.quantity
+      name,
+      category,
+      estimatedPrice,
+      quantity,
+      userId
     }
   });
 };
 
-export const listItemsService = async () => {
-  return prisma.item.findMany({
-    orderBy: { createdAt: "desc" }
+export const getItemByIdService = async (userId: string, id: string) => {
+  return prisma.item.findFirst({
+    where: {
+      id,
+      userId
+    }
   });
 };
 
-export const getItemByIdService = async (id: string) => {
-  return prisma.item.findUnique({
-    where: { id }
+export const updateItemService = async ({
+  userId,
+  id,
+  quantity,
+  estimatedPrice
+}: UpdateItemParams) => {
+  const existing = await prisma.item.findFirst({
+    where: {
+      id,
+      userId
+    }
   });
-};
 
-export const deleteItemService = async (id: string) => {
-  const existing = await prisma.item.findUnique({ where: { id } });
   if (!existing) return null;
 
-  await prisma.item.delete({ where: { id } });
-  return existing;
-};
-
-export const updateItemService = async (id: string, data: Prisma.ItemUpdateInput) => {
   return prisma.item.update({
     where: { id },
-    data
+    data: {
+      ...(typeof quantity === "number" ? { quantity } : {}),
+      ...(typeof estimatedPrice === "number" ? { estimatedPrice } : {})
+    }
   });
+};
+
+export const deleteItemService = async (userId: string, id: string) => {
+  const existing = await prisma.item.findFirst({
+    where: {
+      id,
+      userId
+    }
+  });
+
+  if (!existing) return null;
+
+  await prisma.item.delete({
+    where: { id }
+  });
+
+  return true;
 };
