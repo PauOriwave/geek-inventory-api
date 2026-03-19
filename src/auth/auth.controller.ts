@@ -50,3 +50,13 @@ export async function logout(_req: Request, res: Response) {
   res.clearCookie("session");
   res.json({ ok: true });
 }
+
+export async function me(req: Request, res: Response) {
+  if (!req.user?.id) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+
+  return res.json({
+    id: req.user.id
+  });
+}
