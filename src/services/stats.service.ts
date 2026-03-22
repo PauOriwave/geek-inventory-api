@@ -1,13 +1,20 @@
 import prisma from "../prisma/client";
 
-export const getSummaryService = async () => {
+export const getSummaryService = async (userId: string) => {
   const items = await prisma.item.findMany({
+    where: { userId },
     select: { estimatedPrice: true, quantity: true }
   });
 
-  const totalValue = items.reduce((acc, it) => acc + Number(it.estimatedPrice) * it.quantity, 0);
+  const totalValue = items.reduce(
+    (acc, it) => acc + Number(it.estimatedPrice) * it.quantity,
+    0
+  );
+
   const totalUnits = items.reduce((acc, it) => acc + it.quantity, 0);
-  const totalItems = await prisma.item.count();
+  const totalItems = await prisma.item.count({
+    where: { userId }
+  });
 
   return { totalItems, totalUnits, totalValue };
 };
@@ -19,20 +26,34 @@ export type ByCategoryRow = {
   items: number;
 };
 
-export async function getByCategory(): Promise<ByCategoryRow[]> {
-  // OJO: "Item" debe coincidir con tu tabla real. Con Prisma normalmente es "Item".
-  const rows = await prisma.$queryRaw<ByCategoryRow[]>`
-    SELECT
-      "category"::text AS "category",
-      COALESCE(SUM("quantity"), 0)::int AS "units",
-      COALESCE(SUM(("estimatedPrice"::numeric) * ("quantity"::numeric)), 0)::float AS "value",
-      COUNT(*)::int AS "items"
-    FROM "Item"
-    GROUP BY "category"
-    ORDER BY "value" DESC;
-  `;
+export async function getByCategory(userId: string): Promise<ByCategoryRow[]> {
+  const items = await prisma.item.findMany({
+    where: { userId },
+    select: {
+      category: true,
+      quantity: true,
+      estimatedPrice: true
+    }
+  });
 
-  return rows;
+  const map = new Map<string, ByCategoryRow>();
+
+  for (const item of items) {
+    const current = map.get(item.category) ?? {
+      category: item.category,
+      units: 0,
+      value: 0,
+      items: 0
+    };
+
+    current.units += item.quantity;
+    current.value += Number(item.estimatedPrice) * item.quantity;
+    current.items += 1;
+
+    map.set(item.category, current);
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.value - a.value);
 }
 
 export type TopItemRow = {
@@ -44,21 +65,32 @@ export type TopItemRow = {
   totalValue: number;
 };
 
-export async function getTopItems(limit = 10): Promise<TopItemRow[]> {
+export async function getTopItems(
+  userId: string,
+  limit = 10
+): Promise<TopItemRow[]> {
   const safeLimit = Math.min(50, Math.max(1, limit));
 
-  const rows = await prisma.$queryRaw<TopItemRow[]>`
-    SELECT
-      "id"::text AS "id",
-      "name"::text AS "name",
-      "category"::text AS "category",
-      "quantity"::int AS "quantity",
-      ("estimatedPrice"::numeric)::float AS "estimatedPrice",
-      (("estimatedPrice"::numeric) * ("quantity"::numeric))::float AS "totalValue"
-    FROM "Item"
-    ORDER BY (("estimatedPrice"::numeric) * ("quantity"::numeric)) DESC
-    LIMIT ${safeLimit};
-  `;
+  const items = await prisma.item.findMany({
+    where: { userId },
+    select: {
+      id: true,
+      name: true,
+      category: true,
+      quantity: true,
+      estimatedPrice: true
+    }
+  });
 
-  return rows;
+  return items
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      quantity: item.quantity,
+      estimatedPrice: Number(item.estimatedPrice),
+      totalValue: Number(item.estimatedPrice) * item.quantity
+    }))
+    .sort((a, b) => b.totalValue - a.totalValue)
+    .slice(0, safeLimit);
 }

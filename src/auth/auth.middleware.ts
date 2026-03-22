@@ -4,7 +4,15 @@ import jwt from "jsonwebtoken";
 const JWT_SECRET = "dev-secret";
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const token = req.cookies.session;
+  const cookieToken = req.cookies?.session;
+
+  const authHeader = req.headers.authorization;
+  const bearerToken =
+    authHeader && authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : undefined;
+
+  const token = cookieToken || bearerToken;
 
   if (!token) {
     return res.status(401).json({ message: "Not authenticated" });

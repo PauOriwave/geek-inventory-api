@@ -12,13 +12,10 @@ export async function register(req: Request, res: Response) {
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET);
 
-    res.cookie("session", token, {
-      httpOnly: true
-    });
-
     res.json({
       id: user.id,
-      email: user.email
+      email: user.email,
+      token
     });
   } catch {
     res.status(400).json({ message: "User already exists" });
@@ -36,18 +33,14 @@ export async function login(req: Request, res: Response) {
 
   const token = jwt.sign({ userId: user.id }, JWT_SECRET);
 
-  res.cookie("session", token, {
-    httpOnly: true
-  });
-
   res.json({
     id: user.id,
-    email: user.email
+    email: user.email,
+    token
   });
 }
 
 export async function logout(_req: Request, res: Response) {
-  res.clearCookie("session");
   res.json({ ok: true });
 }
 
