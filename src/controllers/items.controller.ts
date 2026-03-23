@@ -9,7 +9,10 @@ import {
 
 export const listItems = async (req: Request, res: Response) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
 
   const q = typeof req.query.q === "string" ? req.query.q : undefined;
   const category =
@@ -48,16 +51,28 @@ export const listItems = async (req: Request, res: Response) => {
 
 export const createItem = async (req: Request, res: Response) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ message: "Not authenticated" });
 
-  const { name, category, estimatedPrice, quantity } = req.body;
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+
+  const {
+    name,
+    category,
+    estimatedPrice,
+    quantity,
+    condition,
+    notes
+  } = req.body;
 
   const item = await createItemService({
     userId,
     name,
     category,
     estimatedPrice: Number(estimatedPrice),
-    quantity: Number(quantity)
+    quantity: Number(quantity),
+    condition,
+    notes
   });
 
   res.status(201).json(item);
@@ -65,7 +80,10 @@ export const createItem = async (req: Request, res: Response) => {
 
 export const getItemById = async (req: Request, res: Response) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
 
   const id = String(req.params.id);
 
@@ -80,21 +98,40 @@ export const getItemById = async (req: Request, res: Response) => {
 
 export const updateItem = async (req: Request, res: Response) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
 
   const id = String(req.params.id);
-  const { quantity, estimatedPrice } = req.body;
+  const { quantity, estimatedPrice, condition, notes } = req.body;
 
   const item = await updateItemService({
     userId,
     id,
     quantity:
-      typeof quantity === "number" ? quantity : quantity !== undefined ? Number(quantity) : undefined,
+      typeof quantity === "number"
+        ? quantity
+        : quantity !== undefined
+          ? Number(quantity)
+          : undefined,
     estimatedPrice:
       typeof estimatedPrice === "number"
         ? estimatedPrice
         : estimatedPrice !== undefined
           ? Number(estimatedPrice)
+          : undefined,
+    condition:
+      typeof condition === "string"
+        ? condition
+        : condition === null
+          ? ""
+          : undefined,
+    notes:
+      typeof notes === "string"
+        ? notes
+        : notes === null
+          ? ""
           : undefined
   });
 
@@ -107,7 +144,10 @@ export const updateItem = async (req: Request, res: Response) => {
 
 export const deleteItem = async (req: Request, res: Response) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ message: "Not authenticated" });
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
 
   const id = String(req.params.id);
 
