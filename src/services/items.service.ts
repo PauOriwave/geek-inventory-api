@@ -19,6 +19,7 @@ type CreateItemParams = {
   quantity: number;
   condition?: string;
   notes?: string;
+  platform?: string;
 };
 
 type UpdateItemParams = {
@@ -28,6 +29,7 @@ type UpdateItemParams = {
   estimatedPrice?: number;
   condition?: string;
   notes?: string;
+  platform?: string;
 };
 
 export const listItemsService = async ({
@@ -104,7 +106,8 @@ export const createItemService = async ({
   estimatedPrice,
   quantity,
   condition,
-  notes
+  notes,
+  platform
 }: CreateItemParams) => {
   return prisma.item.create({
     data: {
@@ -114,7 +117,8 @@ export const createItemService = async ({
       quantity,
       userId,
       condition,
-      notes
+      notes,
+      platform
     }
   });
 };
@@ -134,7 +138,8 @@ export const updateItemService = async ({
   quantity,
   estimatedPrice,
   condition,
-  notes
+  notes,
+  platform
 }: UpdateItemParams) => {
   const existing = await prisma.item.findFirst({
     where: {
@@ -151,7 +156,8 @@ export const updateItemService = async ({
       ...(typeof quantity === "number" ? { quantity } : {}),
       ...(typeof estimatedPrice === "number" ? { estimatedPrice } : {}),
       ...(condition !== undefined ? { condition } : {}),
-      ...(notes !== undefined ? { notes } : {})
+      ...(notes !== undefined ? { notes } : {}),
+      ...(platform !== undefined ? { platform } : {})
     }
   });
 };

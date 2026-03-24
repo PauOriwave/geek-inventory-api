@@ -33,8 +33,9 @@ model Item {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  condition      String? 
+  condition      String?
   notes          String?
+  platform       String?
 
   userId         String
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)

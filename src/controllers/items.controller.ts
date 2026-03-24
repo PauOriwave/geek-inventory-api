@@ -62,7 +62,8 @@ export const createItem = async (req: Request, res: Response) => {
     estimatedPrice,
     quantity,
     condition,
-    notes
+    notes,
+    platform
   } = req.body;
 
   const item = await createItemService({
@@ -72,7 +73,8 @@ export const createItem = async (req: Request, res: Response) => {
     estimatedPrice: Number(estimatedPrice),
     quantity: Number(quantity),
     condition,
-    notes
+    notes,
+    platform
   });
 
   res.status(201).json(item);
@@ -104,7 +106,7 @@ export const updateItem = async (req: Request, res: Response) => {
   }
 
   const id = String(req.params.id);
-  const { quantity, estimatedPrice, condition, notes } = req.body;
+  const { quantity, estimatedPrice, condition, notes, platform } = req.body;
 
   const item = await updateItemService({
     userId,
@@ -131,6 +133,12 @@ export const updateItem = async (req: Request, res: Response) => {
       typeof notes === "string"
         ? notes
         : notes === null
+          ? ""
+          : undefined,
+    platform:
+      typeof platform === "string"
+        ? platform
+        : platform === null
           ? ""
           : undefined
   });
