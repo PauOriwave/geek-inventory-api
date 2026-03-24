@@ -21,6 +21,7 @@ type CreateItemParams = {
   notes?: string;
   platform?: string;
   completeness?: string;
+  region?: string;
 };
 
 type UpdateItemParams = {
@@ -32,6 +33,7 @@ type UpdateItemParams = {
   notes?: string;
   platform?: string;
   completeness?: string;
+  region?: string;
 };
 
 export const listItemsService = async ({
@@ -110,7 +112,8 @@ export const createItemService = async ({
   condition,
   notes,
   platform,
-  completeness
+  completeness,
+  region
 }: CreateItemParams) => {
   return prisma.item.create({
     data: {
@@ -122,7 +125,8 @@ export const createItemService = async ({
       condition,
       notes,
       platform,
-      completeness
+      completeness,
+      region
     }
   });
 };
@@ -144,7 +148,8 @@ export const updateItemService = async ({
   condition,
   notes,
   platform,
-  completeness
+  completeness,
+  region
 }: UpdateItemParams) => {
   const existing = await prisma.item.findFirst({
     where: {
@@ -163,7 +168,8 @@ export const updateItemService = async ({
       ...(condition !== undefined ? { condition } : {}),
       ...(notes !== undefined ? { notes } : {}),
       ...(platform !== undefined ? { platform } : {}),
-      ...(completeness !== undefined ? { completeness } : {})
+      ...(completeness !== undefined ? { completeness } : {}),
+      ...(region !== undefined ? { region } : {})
     }
   });
 };

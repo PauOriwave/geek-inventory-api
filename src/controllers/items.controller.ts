@@ -64,7 +64,8 @@ export const createItem = async (req: Request, res: Response) => {
     condition,
     notes,
     platform,
-    completeness
+    completeness,
+    region
   } = req.body;
 
   const item = await createItemService({
@@ -76,7 +77,8 @@ export const createItem = async (req: Request, res: Response) => {
     condition,
     notes,
     platform,
-    completeness
+    completeness,
+    region
   });
 
   res.status(201).json(item);
@@ -108,7 +110,15 @@ export const updateItem = async (req: Request, res: Response) => {
   }
 
   const id = String(req.params.id);
-  const { quantity, estimatedPrice, condition, notes, platform, completeness } = req.body;
+  const {
+    quantity,
+    estimatedPrice,
+    condition,
+    notes,
+    platform,
+    completeness,
+    region
+  } = req.body;
 
   const item = await updateItemService({
     userId,
@@ -148,8 +158,13 @@ export const updateItem = async (req: Request, res: Response) => {
         ? completeness
         : completeness === null
           ? ""
-          : undefined      
-
+          : undefined,
+    region:
+      typeof region === "string"
+        ? region
+        : region === null
+          ? ""
+          : undefined
   });
 
   if (!item) {
