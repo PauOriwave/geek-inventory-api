@@ -36,6 +36,7 @@ model Item {
   condition      String?
   notes          String?
   platform       String?
+  completeness   String?
 
   userId         String
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
