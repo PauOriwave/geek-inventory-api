@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import prisma from "../prisma/client";
 import {
   listItemsService,
   createItemService,
@@ -6,6 +7,7 @@ import {
   updateItemService,
   deleteItemService
 } from "../services/items.service";
+import { getValuation } from "../valuation/valuation.service";
 
 export const listItems = async (req: Request, res: Response) => {
   const userId = req.user?.id;
@@ -190,4 +192,57 @@ export const deleteItem = async (req: Request, res: Response) => {
   }
 
   res.status(204).send();
+};
+
+export const valuateItem = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+
+  try {
+    const id = String(req.params.id);
+
+    const item = await prisma.item.findFirst({
+      where: {
+        id,
+        userId
+      }
+    });
+
+    if (!item) {
+      return res.status(404).json({ message: "Item not found" });
+    }
+
+    const valuation = await getValuation(item);
+
+    if (!valuation) {
+      return res.status(400).json({ message: "No valuation found" });
+    }
+
+    const updated = await prisma.item.update({
+      where: { id },
+      data: {
+        marketValue: valuation.price,
+        valuationSource: valuation.source,
+        valuationConfidence: valuation.confidence,
+        lastValuationAt: new Date()
+      }
+    });
+
+    await prisma.itemValuationSnapshot.create({
+      data: {
+        itemId: id,
+        source: valuation.source,
+        marketValue: valuation.price,
+        confidence: valuation.confidence
+      }
+    });
+
+    return res.json(updated);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error valuating item" });
+  }
 };

@@ -30,8 +30,11 @@ model Item {
   category       String
   estimatedPrice Decimal
   quantity       Int
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+
+  marketValue         Decimal?
+  valuationSource     String?
+  valuationConfidence Float?
+  lastValuationAt     DateTime?
 
   condition      String?
   notes          String?
@@ -39,6 +42,23 @@ model Item {
   completeness   String?
   region         String?
 
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
   userId         String
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  snapshots      ItemValuationSnapshot[]
+}
+
+model ItemValuationSnapshot {
+  id          String   @id @default(uuid())
+  itemId      String
+  item        Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  source      String
+  marketValue Decimal
+  confidence  Float?
+
+  recordedAt  DateTime @default(now())
 }
