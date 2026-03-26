@@ -104,6 +104,41 @@ export const getItemById = async (req: Request, res: Response) => {
   return res.json(item);
 };
 
+export const getItemSnapshots = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+
+  const id = String(req.params.id);
+
+  const item = await prisma.item.findFirst({
+    where: {
+      id,
+      userId
+    },
+    select: {
+      id: true
+    }
+  });
+
+  if (!item) {
+    return res.status(404).json({ message: "Item not found" });
+  }
+
+  const snapshots = await prisma.itemValuationSnapshot.findMany({
+    where: {
+      itemId: id
+    },
+    orderBy: {
+      recordedAt: "desc"
+    }
+  });
+
+  return res.json(snapshots);
+};
+
 export const updateItem = async (req: Request, res: Response) => {
   const userId = req.user?.id;
 
