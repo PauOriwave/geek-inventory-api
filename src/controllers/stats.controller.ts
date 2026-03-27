@@ -38,7 +38,11 @@ export async function statsTopItems(req: Request, res: Response) {
   const limit =
     typeof req.query.limit === "string" ? Number(req.query.limit) : 10;
 
-  const rows = await getTopItems(userId, limit);
+  const category =
+    typeof req.query.category === "string" ? req.query.category : undefined;
+
+  const rows = await getTopItems(userId, limit, category);
+
   res.json(rows);
 }
 

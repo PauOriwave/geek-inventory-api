@@ -75,12 +75,16 @@ export type TopItemRow = {
 
 export async function getTopItems(
   userId: string,
-  limit = 10
+  limit = 10,
+  category?: string
 ): Promise<TopItemRow[]> {
   const safeLimit = Math.min(50, Math.max(1, limit));
 
   const items = await prisma.item.findMany({
-    where: { userId },
+    where: {
+      userId,
+      ...(category ? { category } : {})
+    },
     select: {
       id: true,
       name: true,
