@@ -49,6 +49,9 @@ export async function statsCollectionHistory(req: Request, res: Response) {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
-  const history = await getCollectionValueHistory(userId);
+  const category =
+    typeof req.query.category === "string" ? req.query.category : undefined;
+
+  const history = await getCollectionValueHistory(userId, category);
   res.json(history);
 }

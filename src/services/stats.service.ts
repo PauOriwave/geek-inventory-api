@@ -109,12 +109,14 @@ export type CollectionHistoryPoint = {
 };
 
 export async function getCollectionValueHistory(
-  userId: string
+  userId: string,
+  category?: string
 ): Promise<CollectionHistoryPoint[]> {
   const snapshots = await prisma.itemValuationSnapshot.findMany({
     where: {
       item: {
-        userId
+        userId,
+        ...(category ? { category } : {})
       }
     },
     select: {
