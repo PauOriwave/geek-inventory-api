@@ -281,3 +281,62 @@ export const valuateItem = async (req: Request, res: Response) => {
     return res.status(500).json({ message: "Error valuating item" });
   }
 };
+
+export const valuateAllItems = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+
+  try {
+    const items = await prisma.item.findMany({
+      where: { userId }
+    });
+
+    let processed = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const item of items) {
+      processed++;
+
+      const valuation = await getValuation(item);
+
+      if (!valuation) {
+        skipped++;
+        continue;
+      }
+
+      await prisma.item.update({
+        where: { id: item.id },
+        data: {
+          marketValue: valuation.price,
+          valuationSource: valuation.source,
+          valuationConfidence: valuation.confidence,
+          lastValuationAt: new Date()
+        }
+      });
+
+      await prisma.itemValuationSnapshot.create({
+        data: {
+          itemId: item.id,
+          source: valuation.source,
+          marketValue: valuation.price,
+          confidence: valuation.confidence
+        }
+      });
+
+      updated++;
+    }
+
+    return res.json({
+      processed,
+      updated,
+      skipped
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Error valuating collection" });
+  }
+};
