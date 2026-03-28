@@ -277,3 +277,69 @@ export async function getCollectionValueHistory(
 
   return result;
 }
+
+export type TrendingItemRow = {
+  id: string;
+  name: string;
+  category: string;
+  firstValue: number;
+  latestValue: number;
+  delta: number;
+};
+
+export async function getTrendingItems(
+  userId: string,
+  limit = 5,
+  direction: "rising" | "dropping" = "rising",
+  category?: string
+): Promise<TrendingItemRow[]> {
+  const safeLimit = Math.min(20, Math.max(1, limit));
+
+  const items = await prisma.item.findMany({
+    where: {
+      userId,
+      ...(category ? { category } : {})
+    },
+    select: {
+      id: true,
+      name: true,
+      category: true,
+      snapshots: {
+        orderBy: {
+          recordedAt: "asc"
+        },
+        select: {
+          marketValue: true
+        }
+      }
+    }
+  });
+
+  const rows: TrendingItemRow[] = [];
+
+  for (const item of items) {
+    if (item.snapshots.length < 2) {
+      continue;
+    }
+
+    const firstValue = Number(item.snapshots[0].marketValue);
+    const latestValue = Number(item.snapshots[item.snapshots.length - 1].marketValue);
+    const delta = Number((latestValue - firstValue).toFixed(2));
+
+    rows.push({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      firstValue,
+      latestValue,
+      delta
+    });
+  }
+
+  const filtered =
+    direction === "rising"
+      ? rows.filter((row) => row.delta > 0.01).sort((a, b) => b.delta - a.delta)
+      : rows.filter((row) => row.delta < -0.01).sort((a, b) => a.delta - b.delta);
+
+  return filtered.slice(0, safeLimit);
+}

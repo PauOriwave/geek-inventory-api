@@ -3,7 +3,8 @@ import {
   getSummaryService,
   getByCategory,
   getTopItems,
-  getCollectionValueHistory
+  getCollectionValueHistory,
+  getTrendingItems
 } from "../services/stats.service";
 
 export async function statsSummary(req: Request, res: Response) {
@@ -58,4 +59,24 @@ export async function statsCollectionHistory(req: Request, res: Response) {
 
   const history = await getCollectionValueHistory(userId, category);
   res.json(history);
+}
+
+export async function statsTrendingItems(req: Request, res: Response) {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+
+  const limit =
+    typeof req.query.limit === "string" ? Number(req.query.limit) : 5;
+
+  const direction =
+    req.query.direction === "dropping" ? "dropping" : "rising";
+
+  const category =
+    typeof req.query.category === "string" ? req.query.category : undefined;
+
+  const rows = await getTrendingItems(userId, limit, direction, category);
+  res.json(rows);
 }
