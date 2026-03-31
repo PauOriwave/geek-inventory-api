@@ -12,6 +12,9 @@ enum Category {
   comic
   tcg
   figure
+  boardgame
+  lego
+  movie
   other
 }
 
