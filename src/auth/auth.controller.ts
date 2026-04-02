@@ -53,3 +53,4 @@ export async function me(req: Request, res: Response) {
     id: req.user.id
   });
 }
+
