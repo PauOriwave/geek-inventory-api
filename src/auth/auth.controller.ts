@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { createUser, loginUser } from "./auth.service";
 import jwt from "jsonwebtoken";
+import prisma from "../prisma/client";
 
 const JWT_SECRET = "dev-secret";
 
@@ -49,8 +50,20 @@ export async function me(req: Request, res: Response) {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
-  return res.json({
-    id: req.user.id
+  const user = await prisma.user.findUnique({
+    where: {
+      id: req.user.id
+    },
+    select: {
+      id: true,
+      email: true,
+      createdAt: true
+    }
   });
-}
 
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  return res.json(user);
+}
