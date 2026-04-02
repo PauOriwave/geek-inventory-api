@@ -1,22 +1,39 @@
+import { Item } from "@prisma/client";
+import { getCexPrice } from "./sources/cex.source";
+import { getGamePrice } from "./sources/game.source";
+
 type ValuationResult = {
-  source: "manual" | "cex" | "game";
   price: number;
+  source: string;
   confidence: number;
 };
 
-export async function getValuation(item: {
-  name: string;
-  estimatedPrice: unknown;
-}): Promise<ValuationResult | null> {
-  const base = Number(item.estimatedPrice);
+// orden de prioridad
+const sources = [
+  getCexPrice,
+  getGamePrice
+];
 
-  if (!Number.isFinite(base) || base <= 0) {
-    return null;
-  }
+export async function getValuation(item: Item): Promise<ValuationResult | null> {
+  const results = await Promise.allSettled(
+    sources.map((s) => s(item))
+  );
+
+  const valid = results
+    .filter((r) => r.status === "fulfilled" && r.value)
+    .map((r: any) => r.value);
+
+  if (valid.length === 0) return null;
+
+  // media ponderada por confidence
+  const totalWeight = valid.reduce((acc, v) => acc + v.confidence, 0);
+
+  const weightedPrice =
+    valid.reduce((acc, v) => acc + v.price * v.confidence, 0) / totalWeight;
 
   return {
-    source: "manual",
-    price: Number((base * 1.1).toFixed(2)),
-    confidence: 0.5
+    price: Number(weightedPrice.toFixed(2)),
+    source: valid.map((v) => v.source).join("+"),
+    confidence: Math.min(1, totalWeight / valid.length)
   };
 }
