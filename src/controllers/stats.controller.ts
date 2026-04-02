@@ -1,35 +1,56 @@
 import { Request, Response } from "express";
 import {
   getSummaryService,
-  getByCategory,
-  getTopItems,
-  getCollectionValueHistory,
-  getTrendingItems
+  getByCategoryService,
+  getTopItemsService,
+  getCollectionHistoryService,
+  getTrendingItemsService
 } from "../services/stats.service";
 
-export async function statsSummary(req: Request, res: Response) {
+export async function getSummary(req: Request, res: Response) {
   const userId = req.user?.id;
 
   if (!userId) {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
-  const summary = await getSummaryService(userId);
-  res.json(summary);
+  const q = typeof req.query.q === "string" ? req.query.q : undefined;
+  const category =
+    typeof req.query.category === "string" ? req.query.category : undefined;
+
+  const minPrice =
+    typeof req.query.minPrice === "string"
+      ? Number(req.query.minPrice)
+      : undefined;
+
+  const maxPrice =
+    typeof req.query.maxPrice === "string"
+      ? Number(req.query.maxPrice)
+      : undefined;
+
+  const data = await getSummaryService({
+    userId,
+    q,
+    category,
+    minPrice,
+    maxPrice
+  });
+
+  return res.json(data);
 }
 
-export async function statsByCategory(req: Request, res: Response) {
+export async function getByCategory(req: Request, res: Response) {
   const userId = req.user?.id;
 
   if (!userId) {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
-  const rows = await getByCategory(userId);
-  res.json(rows);
+  const data = await getByCategoryService(userId);
+  return res.json(data);
 }
 
-export async function statsTopItems(req: Request, res: Response) {
+export async function getTopItems(req: Request, res: Response) {
   const userId = req.user?.id;
 
   if (!userId) {
@@ -42,12 +63,11 @@ export async function statsTopItems(req: Request, res: Response) {
   const category =
     typeof req.query.category === "string" ? req.query.category : undefined;
 
-  const rows = await getTopItems(userId, limit, category);
-
-  res.json(rows);
+  const data = await getTopItemsService(userId, limit, category);
+  return res.json(data);
 }
 
-export async function statsCollectionHistory(req: Request, res: Response) {
+export async function getCollectionHistory(req: Request, res: Response) {
   const userId = req.user?.id;
 
   if (!userId) {
@@ -57,26 +77,32 @@ export async function statsCollectionHistory(req: Request, res: Response) {
   const category =
     typeof req.query.category === "string" ? req.query.category : undefined;
 
-  const history = await getCollectionValueHistory(userId, category);
-  res.json(history);
+  const data = await getCollectionHistoryService(userId, category);
+  return res.json(data);
 }
 
-export async function statsTrendingItems(req: Request, res: Response) {
+export async function getTrendingItems(req: Request, res: Response) {
   const userId = req.user?.id;
 
   if (!userId) {
     return res.status(401).json({ message: "Not authenticated" });
   }
-
-  const limit =
-    typeof req.query.limit === "string" ? Number(req.query.limit) : 5;
 
   const direction =
     req.query.direction === "dropping" ? "dropping" : "rising";
 
+  const limit =
+    typeof req.query.limit === "string" ? Number(req.query.limit) : 5;
+
   const category =
     typeof req.query.category === "string" ? req.query.category : undefined;
 
-  const rows = await getTrendingItems(userId, limit, direction, category);
-  res.json(rows);
+  const data = await getTrendingItemsService(
+    userId,
+    direction,
+    limit,
+    category
+  );
+
+  return res.json(data);
 }

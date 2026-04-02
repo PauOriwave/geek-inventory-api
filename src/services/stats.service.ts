@@ -1,170 +1,25 @@
 import prisma from "../prisma/client";
 
-export const getSummaryService = async (userId: string) => {
-  const items = await prisma.item.findMany({
-    where: { userId },
-    select: {
-      estimatedPrice: true,
-      quantity: true
-    }
-  });
-
-  const totalValue = items.reduce(
-    (acc, it) => acc + Number(it.estimatedPrice) * it.quantity,
-    0
-  );
-
-  const totalUnits = items.reduce((acc, it) => acc + it.quantity, 0);
-
-  const totalItems = await prisma.item.count({
-    where: { userId }
-  });
-
-  return {
-    totalItems,
-    totalUnits,
-    totalValue
-  };
+type SummaryParams = {
+  userId: string;
+  q?: string;
+  category?: string;
+  minPrice?: number;
+  maxPrice?: number;
 };
 
-export type ByCategoryRow = {
+type TrendKind = "rising" | "dropping" | "stable";
+
+type ByCategoryRow = {
   category: string;
   units: number;
   value: number;
   items: number;
-  trend: "rising" | "dropping" | "stable";
+  trend: TrendKind;
   trendDelta: number;
 };
 
-export async function getByCategory(userId: string): Promise<ByCategoryRow[]> {
-  const items = await prisma.item.findMany({
-    where: { userId },
-    select: {
-      id: true,
-      category: true,
-      quantity: true,
-      estimatedPrice: true
-    }
-  });
-
-  const map = new Map<string, ByCategoryRow>();
-
-  for (const item of items) {
-    const current = map.get(item.category) ?? {
-      category: item.category,
-      units: 0,
-      value: 0,
-      items: 0,
-      trend: "stable" as const,
-      trendDelta: 0
-    };
-
-    current.units += item.quantity;
-    current.value += Number(item.estimatedPrice) * item.quantity;
-    current.items += 1;
-
-    map.set(item.category, current);
-  }
-
-  const snapshots = await prisma.itemValuationSnapshot.findMany({
-    where: {
-      item: {
-        userId
-      }
-    },
-    select: {
-      itemId: true,
-      marketValue: true,
-      recordedAt: true,
-      item: {
-        select: {
-          category: true
-        }
-      }
-    },
-    orderBy: {
-      recordedAt: "asc"
-    }
-  });
-
-  const byCategoryHistory = new Map<
-    string,
-    Array<{ itemId: string; marketValue: number; recordedAt: Date }>
-  >();
-
-  for (const snapshot of snapshots) {
-    const category = snapshot.item.category;
-    const list = byCategoryHistory.get(category) ?? [];
-
-    list.push({
-      itemId: snapshot.itemId,
-      marketValue: Number(snapshot.marketValue),
-      recordedAt: snapshot.recordedAt
-    });
-
-    byCategoryHistory.set(category, list);
-  }
-
-  for (const [category, history] of byCategoryHistory.entries()) {
-    const groupedByDay = new Map<
-      string,
-      Array<{ itemId: string; marketValue: number }>
-    >();
-
-    for (const entry of history) {
-      const day = entry.recordedAt.toISOString().slice(0, 10);
-      const list = groupedByDay.get(day) ?? [];
-
-      list.push({
-        itemId: entry.itemId,
-        marketValue: entry.marketValue
-      });
-
-      groupedByDay.set(day, list);
-    }
-
-    const lastKnownByItem = new Map<string, number>();
-    const totals: number[] = [];
-
-    for (const [, entries] of Array.from(groupedByDay.entries()).sort((a, b) =>
-      a[0].localeCompare(b[0])
-    )) {
-      for (const entry of entries) {
-        lastKnownByItem.set(entry.itemId, entry.marketValue);
-      }
-
-      const total = Array.from(lastKnownByItem.values()).reduce(
-        (acc, value) => acc + value,
-        0
-      );
-
-      totals.push(Number(total.toFixed(2)));
-    }
-
-    const row = map.get(category);
-    if (!row || totals.length === 0) continue;
-
-    const first = totals[0];
-    const latest = totals[totals.length - 1];
-    const delta = Number((latest - first).toFixed(2));
-
-    row.trendDelta = delta;
-
-    if (delta > 0.01) {
-      row.trend = "rising";
-    } else if (delta < -0.01) {
-      row.trend = "dropping";
-    } else {
-      row.trend = "stable";
-    }
-
-    map.set(category, row);
-  }
-
-  return Array.from(map.values()).sort((a, b) => b.value - a.value);
-}
-
-export type TopItemRow = {
+type TopItemRow = {
   id: string;
   name: string;
   category: string;
@@ -173,13 +28,166 @@ export type TopItemRow = {
   totalValue: number;
 };
 
-export async function getTopItems(
+type HistoryPoint = {
+  date: string;
+  total: number;
+};
+
+type TrendingItemRow = {
+  id: string;
+  name: string;
+  category: string;
+  firstValue: number;
+  latestValue: number;
+  delta: number;
+};
+
+type TrendingDirection = "rising" | "dropping";
+
+function buildWhere({
+  userId,
+  q,
+  category,
+  minPrice,
+  maxPrice
+}: SummaryParams) {
+  const where: any = { userId };
+
+  if (q) {
+    where.name = {
+      contains: q,
+      mode: "insensitive"
+    };
+  }
+
+  if (category) {
+    where.category = category;
+  }
+
+  if (
+    (typeof minPrice === "number" && !Number.isNaN(minPrice)) ||
+    (typeof maxPrice === "number" && !Number.isNaN(maxPrice))
+  ) {
+    where.estimatedPrice = {};
+
+    if (typeof minPrice === "number" && !Number.isNaN(minPrice)) {
+      where.estimatedPrice.gte = minPrice;
+    }
+
+    if (typeof maxPrice === "number" && !Number.isNaN(maxPrice)) {
+      where.estimatedPrice.lte = maxPrice;
+    }
+  }
+
+  return where;
+}
+
+export async function getSummaryService(params: SummaryParams) {
+  const where = buildWhere(params);
+
+  const items = await prisma.item.findMany({
+    where,
+    select: {
+      estimatedPrice: true,
+      quantity: true
+    }
+  });
+
+  const totalItems = items.length;
+  const totalUnits = items.reduce((acc, item) => acc + item.quantity, 0);
+  const totalValue = items.reduce(
+    (acc, item) => acc + Number(item.estimatedPrice) * item.quantity,
+    0
+  );
+
+  return {
+    totalItems,
+    totalUnits,
+    totalValue: Number(totalValue.toFixed(2))
+  };
+}
+
+export async function getByCategoryService(
+  userId: string
+): Promise<ByCategoryRow[]> {
+  const items = await prisma.item.findMany({
+    where: { userId },
+    select: {
+      id: true,
+      category: true,
+      quantity: true,
+      estimatedPrice: true,
+      snapshots: {
+        orderBy: {
+          recordedAt: "asc"
+        },
+        select: {
+          marketValue: true,
+          recordedAt: true
+        }
+      }
+    }
+  });
+
+  const grouped = new Map<
+    string,
+    {
+      category: string;
+      units: number;
+      value: number;
+      items: number;
+      trendDelta: number;
+    }
+  >();
+
+  for (const item of items) {
+    const key = item.category;
+
+    const current = grouped.get(key) ?? {
+      category: key,
+      units: 0,
+      value: 0,
+      items: 0,
+      trendDelta: 0
+    };
+
+    current.units += item.quantity;
+    current.items += 1;
+    current.value += Number(item.estimatedPrice) * item.quantity;
+
+    if (item.snapshots.length >= 2) {
+      const first = Number(item.snapshots[0].marketValue);
+      const latest = Number(item.snapshots[item.snapshots.length - 1].marketValue);
+      current.trendDelta += latest - first;
+    }
+
+    grouped.set(key, current);
+  }
+
+  const rows: ByCategoryRow[] = [...grouped.values()].map((row) => {
+    let trend: TrendKind = "stable";
+
+    if (row.trendDelta > 0) trend = "rising";
+    if (row.trendDelta < 0) trend = "dropping";
+
+    return {
+      category: row.category,
+      units: row.units,
+      value: Number(row.value.toFixed(2)),
+      items: row.items,
+      trend,
+      trendDelta: Number(row.trendDelta.toFixed(2))
+    };
+  });
+
+  return rows.sort((a, b) => b.value - a.value);
+}
+
+export async function getTopItemsService(
   userId: string,
   limit = 10,
   category?: string
 ): Promise<TopItemRow[]> {
-  const safeLimit = Math.min(50, Math.max(1, limit));
-
   const items = await prisma.item.findMany({
     where: {
       userId,
@@ -201,100 +209,60 @@ export async function getTopItems(
       category: item.category,
       quantity: item.quantity,
       estimatedPrice: Number(item.estimatedPrice),
-      totalValue: Number(item.estimatedPrice) * item.quantity
+      totalValue: Number((Number(item.estimatedPrice) * item.quantity).toFixed(2))
     }))
     .sort((a, b) => b.totalValue - a.totalValue)
-    .slice(0, safeLimit);
+    .slice(0, limit);
 }
 
-export type CollectionHistoryPoint = {
-  date: string;
-  total: number;
-};
-
-export async function getCollectionValueHistory(
+export async function getCollectionHistoryService(
   userId: string,
   category?: string
-): Promise<CollectionHistoryPoint[]> {
-  const snapshots = await prisma.itemValuationSnapshot.findMany({
+): Promise<HistoryPoint[]> {
+  const items = await prisma.item.findMany({
     where: {
-      item: {
-        userId,
-        ...(category ? { category } : {})
-      }
+      userId,
+      ...(category ? { category } : {})
     },
     select: {
-      itemId: true,
-      marketValue: true,
-      recordedAt: true
-    },
-    orderBy: {
-      recordedAt: "asc"
+      id: true,
+      quantity: true,
+      snapshots: {
+        orderBy: {
+          recordedAt: "asc"
+        },
+        select: {
+          marketValue: true,
+          recordedAt: true
+        }
+      }
     }
   });
 
-  if (snapshots.length === 0) {
-    return [];
-  }
+  const totalsByDate = new Map<string, number>();
 
-  const groupedByDay = new Map<
-    string,
-    Array<{ itemId: string; marketValue: number }>
-  >();
-
-  for (const snapshot of snapshots) {
-    const day = snapshot.recordedAt.toISOString().slice(0, 10);
-    const list = groupedByDay.get(day) ?? [];
-
-    list.push({
-      itemId: snapshot.itemId,
-      marketValue: Number(snapshot.marketValue)
-    });
-
-    groupedByDay.set(day, list);
-  }
-
-  const lastKnownByItem = new Map<string, number>();
-  const result: CollectionHistoryPoint[] = [];
-
-  for (const [date, entries] of Array.from(groupedByDay.entries()).sort(
-    (a, b) => a[0].localeCompare(b[0])
-  )) {
-    for (const entry of entries) {
-      lastKnownByItem.set(entry.itemId, entry.marketValue);
+  for (const item of items) {
+    for (const snapshot of item.snapshots) {
+      const date = snapshot.recordedAt.toISOString().slice(0, 10);
+      const value = Number(snapshot.marketValue) * item.quantity;
+      totalsByDate.set(date, (totalsByDate.get(date) ?? 0) + value);
     }
+  }
 
-    const total = Array.from(lastKnownByItem.values()).reduce(
-      (acc, value) => acc + value,
-      0
-    );
-
-    result.push({
+  return [...totalsByDate.entries()]
+    .map(([date, total]) => ({
       date,
       total: Number(total.toFixed(2))
-    });
-  }
-
-  return result;
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export type TrendingItemRow = {
-  id: string;
-  name: string;
-  category: string;
-  firstValue: number;
-  latestValue: number;
-  delta: number;
-};
-
-export async function getTrendingItems(
+export async function getTrendingItemsService(
   userId: string,
+  direction: TrendingDirection,
   limit = 5,
-  direction: "rising" | "dropping" = "rising",
   category?: string
 ): Promise<TrendingItemRow[]> {
-  const safeLimit = Math.min(20, Math.max(1, limit));
-
   const items = await prisma.item.findMany({
     where: {
       userId,
@@ -309,7 +277,8 @@ export async function getTrendingItems(
           recordedAt: "asc"
         },
         select: {
-          marketValue: true
+          marketValue: true,
+          recordedAt: true
         }
       }
     }
@@ -318,28 +287,28 @@ export async function getTrendingItems(
   const rows: TrendingItemRow[] = [];
 
   for (const item of items) {
-    if (item.snapshots.length < 2) {
-      continue;
-    }
+    if (item.snapshots.length < 2) continue;
 
     const firstValue = Number(item.snapshots[0].marketValue);
     const latestValue = Number(item.snapshots[item.snapshots.length - 1].marketValue);
     const delta = Number((latestValue - firstValue).toFixed(2));
 
+    if (direction === "rising" && delta <= 0) continue;
+    if (direction === "dropping" && delta >= 0) continue;
+
     rows.push({
       id: item.id,
       name: item.name,
       category: item.category,
-      firstValue,
-      latestValue,
+      firstValue: Number(firstValue.toFixed(2)),
+      latestValue: Number(latestValue.toFixed(2)),
       delta
     });
   }
 
-  const filtered =
-    direction === "rising"
-      ? rows.filter((row) => row.delta > 0.01).sort((a, b) => b.delta - a.delta)
-      : rows.filter((row) => row.delta < -0.01).sort((a, b) => a.delta - b.delta);
-
-  return filtered.slice(0, safeLimit);
+  return rows
+    .sort((a, b) =>
+      direction === "rising" ? b.delta - a.delta : a.delta - b.delta
+    )
+    .slice(0, limit);
 }
