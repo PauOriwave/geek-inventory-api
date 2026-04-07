@@ -7,6 +7,7 @@ import importRoutes from "./routes/import.routes";
 import exportRoutes from "./routes/export.routes";
 import statsRoutes from "./routes/stats.routes";
 import authRoutes from "./auth/auth.routes";
+import achievementsRoutes from "./routes/achievements.routes";
 
 const app = express();
 
@@ -27,5 +28,6 @@ app.use("/items", itemsRoutes);
 app.use("/import", importRoutes);
 app.use("/export", exportRoutes);
 app.use("/stats", statsRoutes);
+app.use("/achievements", achievementsRoutes);
 
 export default app;
