@@ -10,6 +10,7 @@ import {
   valuateAllItems
 } from "../controllers/items.controller";
 import { requireAuth } from "../auth/auth.middleware";
+import { requirePremium } from "../auth/requirePremium";
 
 const router = Router();
 
@@ -18,7 +19,7 @@ router.get("/:id", requireAuth, getItemById);
 router.get("/:id/snapshots", requireAuth, getItemSnapshots);
 
 router.post("/", requireAuth, createItem);
-router.post("/valuate-all", requireAuth, valuateAllItems);
+router.post("/valuate-all", requireAuth, requirePremium, valuateAllItems);
 router.post("/:id/valuate", requireAuth, valuateItem);
 
 router.patch("/:id", requireAuth, updateItem);

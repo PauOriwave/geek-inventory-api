@@ -11,11 +11,18 @@ export async function register(req: Request, res: Response) {
   try {
     const user = await createUser(email, password);
 
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET);
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        plan: user.plan
+      },
+      JWT_SECRET
+    );
 
     res.json({
       id: user.id,
       email: user.email,
+      plan: user.plan,
       token
     });
   } catch {
@@ -32,11 +39,18 @@ export async function login(req: Request, res: Response) {
     return res.status(401).json({ message: "Invalid credentials" });
   }
 
-  const token = jwt.sign({ userId: user.id }, JWT_SECRET);
+  const token = jwt.sign(
+    {
+      userId: user.id,
+      plan: user.plan
+    },
+    JWT_SECRET
+  );
 
   res.json({
     id: user.id,
     email: user.email,
+    plan: user.plan,
     token
   });
 }
@@ -57,7 +71,8 @@ export async function me(req: Request, res: Response) {
     select: {
       id: true,
       email: true,
-      createdAt: true
+      createdAt: true,
+      plan: true
     }
   });
 

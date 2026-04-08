@@ -24,6 +24,8 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
+  plan         String   @default("free")
+
   items        Item[]
 }
 
