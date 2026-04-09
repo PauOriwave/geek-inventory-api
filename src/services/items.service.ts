@@ -1,5 +1,7 @@
 import prisma from "../prisma/client";
 
+const FREE_ITEM_LIMIT = 50;
+
 type ListItemsParams = {
   userId: string;
   q?: string;
@@ -13,6 +15,7 @@ type ListItemsParams = {
 
 type CreateItemParams = {
   userId: string;
+  plan?: string;
   name: string;
   category: string;
   estimatedPrice: number;
@@ -35,6 +38,13 @@ type UpdateItemParams = {
   completeness?: string;
   region?: string;
 };
+
+export class FreePlanLimitError extends Error {
+  constructor() {
+    super("Free plan item limit reached");
+    this.name = "FreePlanLimitError";
+  }
+}
 
 export const listItemsService = async ({
   userId,
@@ -105,6 +115,7 @@ export const listItemsService = async ({
 
 export const createItemService = async ({
   userId,
+  plan = "free",
   name,
   category,
   estimatedPrice,
@@ -115,6 +126,16 @@ export const createItemService = async ({
   completeness,
   region
 }: CreateItemParams) => {
+  if (plan !== "premium") {
+    const itemCount = await prisma.item.count({
+      where: { userId }
+    });
+
+    if (itemCount >= FREE_ITEM_LIMIT) {
+      throw new FreePlanLimitError();
+    }
+  }
+
   return prisma.item.create({
     data: {
       name,

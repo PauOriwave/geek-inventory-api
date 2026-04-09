@@ -5,7 +5,8 @@ import {
   createItemService,
   getItemByIdService,
   updateItemService,
-  deleteItemService
+  deleteItemService,
+  FreePlanLimitError
 } from "../services/items.service";
 import { getValuation } from "../valuation/valuation.service";
 
@@ -53,6 +54,7 @@ export const listItems = async (req: Request, res: Response) => {
 
 export const createItem = async (req: Request, res: Response) => {
   const userId = req.user?.id;
+  const plan = req.user?.plan ?? "free";
 
   if (!userId) {
     return res.status(401).json({ message: "Not authenticated" });
@@ -70,20 +72,34 @@ export const createItem = async (req: Request, res: Response) => {
     region
   } = req.body;
 
-  const item = await createItemService({
-    userId,
-    name,
-    category,
-    estimatedPrice: Number(estimatedPrice),
-    quantity: Number(quantity),
-    condition,
-    notes,
-    platform,
-    completeness,
-    region
-  });
+  try {
+    const item = await createItemService({
+      userId,
+      plan,
+      name,
+      category,
+      estimatedPrice: Number(estimatedPrice),
+      quantity: Number(quantity),
+      condition,
+      notes,
+      platform,
+      completeness,
+      region
+    });
 
-  res.status(201).json(item);
+    res.status(201).json(item);
+  } catch (error) {
+    if (error instanceof FreePlanLimitError) {
+      return res.status(403).json({
+        message: "Free plan item limit reached",
+        code: "FREE_ITEM_LIMIT_REACHED",
+        limit: 50
+      });
+    }
+
+    console.error(error);
+    return res.status(500).json({ message: "Error creating item" });
+  }
 };
 
 export const getItemById = async (req: Request, res: Response) => {
