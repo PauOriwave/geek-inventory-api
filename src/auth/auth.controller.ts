@@ -23,6 +23,7 @@ export async function register(req: Request, res: Response) {
       id: user.id,
       email: user.email,
       plan: user.plan,
+      premiumStartedAt: user.premiumStartedAt,
       token
     });
   } catch {
@@ -51,6 +52,7 @@ export async function login(req: Request, res: Response) {
     id: user.id,
     email: user.email,
     plan: user.plan,
+    premiumStartedAt: user.premiumStartedAt,
     token
   });
 }
@@ -72,7 +74,8 @@ export async function me(req: Request, res: Response) {
       id: true,
       email: true,
       createdAt: true,
-      plan: true
+      plan: true,
+      premiumStartedAt: true
     }
   });
 
