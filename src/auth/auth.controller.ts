@@ -5,21 +5,40 @@ import { createUser, loginUser } from "./auth.service";
 
 const JWT_SECRET = "dev-secret";
 
+function buildToken(userId: string) {
+  return jwt.sign({ userId }, JWT_SECRET, {
+    expiresIn: "30d"
+  });
+}
+
+function setSessionCookie(res: Response, token: string) {
+  res.cookie("session", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: false,
+    path: "/",
+    maxAge: 1000 * 60 * 60 * 24 * 30
+  });
+}
+
 export async function register(req: Request, res: Response) {
   const { email, password } = req.body;
 
   try {
     const user = await createUser(email, password);
+    const token = buildToken(user.id);
 
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET);
+    setSessionCookie(res, token);
 
-    res.json({
+    return res.json({
       id: user.id,
       email: user.email,
+      plan: user.plan ?? "free",
+      premiumStartedAt: user.premiumStartedAt,
       token
     });
   } catch {
-    res.status(400).json({ message: "User already exists" });
+    return res.status(400).json({ message: "User already exists" });
   }
 }
 
@@ -32,17 +51,28 @@ export async function login(req: Request, res: Response) {
     return res.status(401).json({ message: "Invalid credentials" });
   }
 
-  const token = jwt.sign({ userId: user.id }, JWT_SECRET);
+  const token = buildToken(user.id);
 
-  res.json({
+  setSessionCookie(res, token);
+
+  return res.json({
     id: user.id,
     email: user.email,
+    plan: user.plan ?? "free",
+    premiumStartedAt: user.premiumStartedAt,
     token
   });
 }
 
 export async function logout(_req: Request, res: Response) {
-  res.json({ ok: true });
+  res.clearCookie("session", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: false,
+    path: "/"
+  });
+
+  return res.json({ ok: true });
 }
 
 export async function me(req: Request, res: Response) {
@@ -68,7 +98,6 @@ export async function me(req: Request, res: Response) {
 
 /**
  * SOLO PARA TESTING
- * Luego la quitamos o la cambiamos por Stripe real.
  */
 export async function upgradeToPremium(req: Request, res: Response) {
   if (!req.user?.id) {
@@ -96,7 +125,6 @@ export async function upgradeToPremium(req: Request, res: Response) {
 
 /**
  * SOLO PARA TESTING
- * Te deja subir directamente a Market Pro.
  */
 export async function upgradeToMarketPro(req: Request, res: Response) {
   if (!req.user?.id) {
