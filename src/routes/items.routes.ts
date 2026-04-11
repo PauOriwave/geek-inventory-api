@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { requireAuth } from "../auth/auth.middleware";
-import { requirePlan } from "../middleware/plan.middleware";
 import {
   createItem,
   listItems,
@@ -20,19 +19,13 @@ router.get("/:id/snapshots", requireAuth, getItemSnapshots);
 
 router.post("/", requireAuth, createItem);
 
-router.post(
-  "/valuate-all",
-  requireAuth,
-  requirePlan("premium"),
-  valuateAllItems
-);
-
-router.post(
-  "/:id/valuate",
-  requireAuth,
-  requirePlan("premium"),
-  valuateItem
-);
+/**
+ * 🔓 FREE
+ * Queremos que la valoración sea visible para todos
+ * para alimentar gráficos, evolución y percepción de valor.
+ */
+router.post("/valuate-all", requireAuth, valuateAllItems);
+router.post("/:id/valuate", requireAuth, valuateItem);
 
 router.patch("/:id", requireAuth, updateItem);
 router.delete("/:id", requireAuth, deleteItem);

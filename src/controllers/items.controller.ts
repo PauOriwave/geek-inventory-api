@@ -10,6 +10,19 @@ import {
 } from "../services/items.service";
 import { getValuation } from "../valuation/valuation.service";
 
+function toOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isNaN(value) ? undefined : value;
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+
+  return undefined;
+}
+
 export const listItems = async (req: Request, res: Response) => {
   const userId = req.user?.id;
 
@@ -49,7 +62,7 @@ export const listItems = async (req: Request, res: Response) => {
     pageSize
   });
 
-  res.json(result);
+  return res.json(result);
 };
 
 export const createItem = async (req: Request, res: Response) => {
@@ -87,17 +100,17 @@ export const createItem = async (req: Request, res: Response) => {
       region
     });
 
-    res.status(201).json(item);
+    return res.status(201).json(item);
   } catch (error) {
     if (error instanceof FreePlanLimitError) {
       return res.status(403).json({
         message: "Free plan item limit reached",
         code: "FREE_ITEM_LIMIT_REACHED",
-        limit: 50
+        limit: 25
       });
     }
 
-    console.error(error);
+    console.error("createItem error:", error);
     return res.status(500).json({ message: "Error creating item" });
   }
 };
@@ -173,21 +186,9 @@ export const updateItem = async (req: Request, res: Response) => {
     region
   } = req.body;
 
-  const item = await updateItemService({
-    userId,
-    id,
-    quantity:
-      typeof quantity === "number"
-        ? quantity
-        : quantity !== undefined
-          ? Number(quantity)
-          : undefined,
-    estimatedPrice:
-      typeof estimatedPrice === "number"
-        ? estimatedPrice
-        : estimatedPrice !== undefined
-          ? Number(estimatedPrice)
-          : undefined,
+  const item = await updateItemService(userId, id, {
+    quantity: toOptionalNumber(quantity),
+    estimatedPrice: toOptionalNumber(estimatedPrice),
     condition:
       typeof condition === "string"
         ? condition
@@ -224,7 +225,7 @@ export const updateItem = async (req: Request, res: Response) => {
     return res.status(404).json({ message: "Item not found" });
   }
 
-  res.json(item);
+  return res.json(item);
 };
 
 export const deleteItem = async (req: Request, res: Response) => {
@@ -242,7 +243,7 @@ export const deleteItem = async (req: Request, res: Response) => {
     return res.status(404).json({ message: "Item not found" });
   }
 
-  res.status(204).send();
+  return res.status(204).send();
 };
 
 export const valuateItem = async (req: Request, res: Response) => {
@@ -269,7 +270,10 @@ export const valuateItem = async (req: Request, res: Response) => {
     const valuation = await getValuation(item);
 
     if (!valuation) {
-      return res.status(400).json({ message: "No valuation found" });
+      return res.status(400).json({
+        message: "No valuation found for this item right now",
+        code: "NO_VALUATION_FOUND"
+      });
     }
 
     const updated = await prisma.item.update({
@@ -293,7 +297,7 @@ export const valuateItem = async (req: Request, res: Response) => {
 
     return res.json(updated);
   } catch (err) {
-    console.error(err);
+    console.error("valuateItem error:", err);
     return res.status(500).json({ message: "Error valuating item" });
   }
 };
@@ -352,7 +356,7 @@ export const valuateAllItems = async (req: Request, res: Response) => {
       skipped
     });
   } catch (err) {
-    console.error(err);
+    console.error("valuateAllItems error:", err);
     return res.status(500).json({ message: "Error valuating collection" });
   }
 };

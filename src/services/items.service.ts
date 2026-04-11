@@ -1,7 +1,18 @@
 import prisma from "../prisma/client";
 
+export class FreePlanLimitError extends Error {
+  code: string;
+
+  constructor(message = "Free plan limit reached (25 items)") {
+    super(message);
+    this.name = "FreePlanLimitError";
+    this.code = "FREE_ITEM_LIMIT_REACHED";
+  }
+}
+
 type CreateItemInput = {
   userId: string;
+  plan?: string;
   name: string;
   category: string;
   estimatedPrice: number;
@@ -43,15 +54,15 @@ export async function createItemService(input: CreateItemInput) {
     throw new Error("User not found");
   }
 
-  if ((user.plan || "free") === "free") {
+  const effectivePlan = input.plan ?? user.plan ?? "free";
+
+  if (effectivePlan === "free") {
     const count = await prisma.item.count({
       where: { userId: input.userId }
     });
 
     if (count >= 25) {
-      const error = new Error("Free plan limit reached (25 items)");
-      (error as Error & { code?: string }).code = "FREE_ITEM_LIMIT_REACHED";
-      throw error;
+      throw new FreePlanLimitError();
     }
   }
 
@@ -163,14 +174,21 @@ export async function getItemSnapshotsService(userId: string, id: string) {
 
   const prismaAny = prisma as any;
 
-  if (!prismaAny.itemSnapshot?.findMany) {
-    return [];
+  if (prismaAny.itemValuationSnapshot?.findMany) {
+    return prismaAny.itemValuationSnapshot.findMany({
+      where: { itemId: id },
+      orderBy: { recordedAt: "desc" }
+    });
   }
 
-  return prismaAny.itemSnapshot.findMany({
-    where: { itemId: id },
-    orderBy: { createdAt: "desc" }
-  });
+  if (prismaAny.itemSnapshot?.findMany) {
+    return prismaAny.itemSnapshot.findMany({
+      where: { itemId: id },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  return [];
 }
 
 export async function updateItemService(
