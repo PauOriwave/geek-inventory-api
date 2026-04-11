@@ -1,8 +1,19 @@
 import prisma from "../prisma/client";
 
-const FREE_ITEM_LIMIT = 50;
+type CreateItemInput = {
+  userId: string;
+  name: string;
+  category: string;
+  estimatedPrice: number;
+  quantity: number;
+  condition?: string;
+  platform?: string;
+  completeness?: string;
+  region?: string;
+  notes?: string;
+};
 
-type ListItemsParams = {
+type ListItemsInput = {
   userId: string;
   q?: string;
   category?: string;
@@ -13,97 +24,113 @@ type ListItemsParams = {
   pageSize?: number;
 };
 
-type CreateItemParams = {
-  userId: string;
-  plan?: string;
-  name: string;
-  category: string;
-  estimatedPrice: number;
-  quantity: number;
-  condition?: string;
-  notes?: string;
-  platform?: string;
-  completeness?: string;
-  region?: string;
-};
-
-type UpdateItemParams = {
-  userId: string;
-  id: string;
+type UpdateItemInput = {
   quantity?: number;
   estimatedPrice?: number;
   condition?: string;
-  notes?: string;
   platform?: string;
   completeness?: string;
   region?: string;
+  notes?: string;
 };
 
-export class FreePlanLimitError extends Error {
-  constructor() {
-    super("Free plan item limit reached");
-    this.name = "FreePlanLimitError";
+export async function createItemService(input: CreateItemInput) {
+  const user = await prisma.user.findUnique({
+    where: { id: input.userId }
+  });
+
+  if (!user) {
+    throw new Error("User not found");
   }
+
+  if ((user.plan || "free") === "free") {
+    const count = await prisma.item.count({
+      where: { userId: input.userId }
+    });
+
+    if (count >= 25) {
+      const error = new Error("Free plan limit reached (25 items)");
+      (error as Error & { code?: string }).code = "FREE_ITEM_LIMIT_REACHED";
+      throw error;
+    }
+  }
+
+  return prisma.item.create({
+    data: {
+      userId: input.userId,
+      name: input.name,
+      category: input.category,
+      estimatedPrice: input.estimatedPrice,
+      quantity: input.quantity,
+      condition: input.condition || null,
+      platform: input.platform || null,
+      completeness: input.completeness || null,
+      region: input.region || null,
+      notes: input.notes || null
+    }
+  });
 }
 
-export const listItemsService = async ({
-  userId,
-  q,
-  category,
-  sort,
-  minPrice,
-  maxPrice,
-  page = 1,
-  pageSize = 25
-}: ListItemsParams) => {
-  const where: any = {
-    userId
+export async function listItemsService(input: ListItemsInput) {
+  const page = Math.max(1, input.page ?? 1);
+  const pageSize = Math.max(1, input.pageSize ?? 25);
+  const skip = (page - 1) * pageSize;
+
+  const where: Record<string, unknown> = {
+    userId: input.userId
   };
 
-  if (q) {
+  if (input.q) {
     where.name = {
-      contains: q,
+      contains: input.q,
       mode: "insensitive"
     };
   }
 
-  if (category) {
-    where.category = category;
+  if (input.category) {
+    where.category = input.category;
   }
 
-  if (
-    (typeof minPrice === "number" && !Number.isNaN(minPrice)) ||
-    (typeof maxPrice === "number" && !Number.isNaN(maxPrice))
-  ) {
-    where.estimatedPrice = {};
-
-    if (typeof minPrice === "number" && !Number.isNaN(minPrice)) {
-      where.estimatedPrice.gte = minPrice;
-    }
-
-    if (typeof maxPrice === "number" && !Number.isNaN(maxPrice)) {
-      where.estimatedPrice.lte = maxPrice;
-    }
+  if (input.minPrice != null || input.maxPrice != null) {
+    where.estimatedPrice = {
+      ...(input.minPrice != null ? { gte: input.minPrice } : {}),
+      ...(input.maxPrice != null ? { lte: input.maxPrice } : {})
+    };
   }
 
-  let orderBy: any = { createdAt: "desc" };
+  let orderBy: Record<string, "asc" | "desc"> = { createdAt: "desc" };
 
-  if (sort === "price_desc") {
-    orderBy = { estimatedPrice: "desc" };
+  switch (input.sort) {
+    case "price_asc":
+      orderBy = { estimatedPrice: "asc" };
+      break;
+    case "price_desc":
+      orderBy = { estimatedPrice: "desc" };
+      break;
+    case "name_asc":
+      orderBy = { name: "asc" };
+      break;
+    case "name_desc":
+      orderBy = { name: "desc" };
+      break;
+    case "created_asc":
+      orderBy = { createdAt: "asc" };
+      break;
+    case "created_desc":
+    default:
+      orderBy = { createdAt: "desc" };
+      break;
   }
 
-  if (sort === "price_asc") {
-    orderBy = { estimatedPrice: "asc" };
-  }
-
-  const total = await prisma.item.count({ where });
-
-  const items = await prisma.item.findMany({
-    where,
-    orderBy,
-    skip: (page - 1) * pageSize,
-    take: pageSize
-  });
+  const [items, total] = await Promise.all([
+    prisma.item.findMany({
+      where,
+      orderBy,
+      skip,
+      take: pageSize
+    }),
+    prisma.item.count({ where })
+  ]);
 
   return {
     items,
@@ -111,103 +138,94 @@ export const listItemsService = async ({
     page,
     pageSize
   };
-};
+}
 
-export const createItemService = async ({
-  userId,
-  plan = "free",
-  name,
-  category,
-  estimatedPrice,
-  quantity,
-  condition,
-  notes,
-  platform,
-  completeness,
-  region
-}: CreateItemParams) => {
-  if (plan !== "premium") {
-    const itemCount = await prisma.item.count({
-      where: { userId }
-    });
-
-    if (itemCount >= FREE_ITEM_LIMIT) {
-      throw new FreePlanLimitError();
-    }
-  }
-
-  return prisma.item.create({
-    data: {
-      name,
-      category,
-      estimatedPrice,
-      quantity,
-      userId,
-      condition,
-      notes,
-      platform,
-      completeness,
-      region
-    }
-  });
-};
-
-export const getItemByIdService = async (userId: string, id: string) => {
+export async function getItemByIdService(userId: string, id: string) {
   return prisma.item.findFirst({
     where: {
       id,
       userId
     }
   });
-};
+}
 
-export const updateItemService = async ({
-  userId,
-  id,
-  quantity,
-  estimatedPrice,
-  condition,
-  notes,
-  platform,
-  completeness,
-  region
-}: UpdateItemParams) => {
-  const existing = await prisma.item.findFirst({
+export async function getItemSnapshotsService(userId: string, id: string) {
+  const item = await prisma.item.findFirst({
     where: {
       id,
       userId
     }
   });
 
-  if (!existing) return null;
+  if (!item) {
+    return null;
+  }
+
+  const prismaAny = prisma as any;
+
+  if (!prismaAny.itemSnapshot?.findMany) {
+    return [];
+  }
+
+  return prismaAny.itemSnapshot.findMany({
+    where: { itemId: id },
+    orderBy: { createdAt: "desc" }
+  });
+}
+
+export async function updateItemService(
+  userId: string,
+  id: string,
+  data: UpdateItemInput
+) {
+  const item = await prisma.item.findFirst({
+    where: {
+      id,
+      userId
+    }
+  });
+
+  if (!item) {
+    return null;
+  }
 
   return prisma.item.update({
     where: { id },
     data: {
-      ...(typeof quantity === "number" ? { quantity } : {}),
-      ...(typeof estimatedPrice === "number" ? { estimatedPrice } : {}),
-      ...(condition !== undefined ? { condition } : {}),
-      ...(notes !== undefined ? { notes } : {}),
-      ...(platform !== undefined ? { platform } : {}),
-      ...(completeness !== undefined ? { completeness } : {}),
-      ...(region !== undefined ? { region } : {})
+      ...(data.quantity != null ? { quantity: data.quantity } : {}),
+      ...(data.estimatedPrice != null
+        ? { estimatedPrice: data.estimatedPrice }
+        : {}),
+      ...(data.condition !== undefined
+        ? { condition: data.condition || null }
+        : {}),
+      ...(data.platform !== undefined
+        ? { platform: data.platform || null }
+        : {}),
+      ...(data.completeness !== undefined
+        ? { completeness: data.completeness || null }
+        : {}),
+      ...(data.region !== undefined ? { region: data.region || null } : {}),
+      ...(data.notes !== undefined ? { notes: data.notes || null } : {})
     }
   });
-};
+}
 
-export const deleteItemService = async (userId: string, id: string) => {
-  const existing = await prisma.item.findFirst({
+export async function deleteItemService(userId: string, id: string) {
+  const item = await prisma.item.findFirst({
     where: {
       id,
       userId
     }
   });
 
-  if (!existing) return null;
+  if (!item) {
+    return false;
+  }
 
   await prisma.item.delete({
     where: { id }
   });
 
   return true;
-};
+}

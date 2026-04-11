@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { requireAuth } from "../auth/auth.middleware";
+import { requirePlan } from "../middleware/plan.middleware";
 import {
   createItem,
   listItems,
@@ -9,8 +11,6 @@ import {
   valuateItem,
   valuateAllItems
 } from "../controllers/items.controller";
-import { requireAuth } from "../auth/auth.middleware";
-import { requirePremium } from "../auth/requirePremium";
 
 const router = Router();
 
@@ -19,8 +19,20 @@ router.get("/:id", requireAuth, getItemById);
 router.get("/:id/snapshots", requireAuth, getItemSnapshots);
 
 router.post("/", requireAuth, createItem);
-router.post("/valuate-all", requireAuth, requirePremium, valuateAllItems);
-router.post("/:id/valuate", requireAuth, valuateItem);
+
+router.post(
+  "/valuate-all",
+  requireAuth,
+  requirePlan("premium"),
+  valuateAllItems
+);
+
+router.post(
+  "/:id/valuate",
+  requireAuth,
+  requirePlan("premium"),
+  valuateItem
+);
 
 router.patch("/:id", requireAuth, updateItem);
 router.delete("/:id", requireAuth, deleteItem);

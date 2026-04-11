@@ -1,13 +1,9 @@
 import prisma from "../prisma/client";
 
-type ListWishlistParams = {
-  userId: string;
-};
-
-type CreateWishlistParams = {
+type CreateWishlistInput = {
   userId: string;
   name: string;
-  category: string;
+  category?: string;
   targetPrice?: number;
   currentMarketValue?: number;
   platform?: string;
@@ -15,59 +11,66 @@ type CreateWishlistParams = {
   notes?: string;
 };
 
-const wishlistModel = (prisma as any).wishlistItem;
-
 export async function listWishlistService({
   userId
-}: ListWishlistParams) {
-  return wishlistModel.findMany({
+}: {
+  userId: string;
+}) {
+  return prisma.wishlistItem.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" }
   });
 }
 
-export async function createWishlistService({
-  userId,
-  name,
-  category,
-  targetPrice,
-  currentMarketValue,
-  platform,
-  region,
-  notes
-}: CreateWishlistParams) {
-  return wishlistModel.create({
+export async function createWishlistService(input: CreateWishlistInput) {
+  const user = await prisma.user.findUnique({
+    where: { id: input.userId }
+  });
+
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  if ((user.plan || "free") === "free") {
+    const count = await prisma.wishlistItem.count({
+      where: { userId: input.userId }
+    });
+
+    if (count >= 10) {
+      const error = new Error("Free wishlist limit reached (10 items)");
+      (error as Error & { code?: string }).code =
+        "FREE_WISHLIST_LIMIT_REACHED";
+      throw error;
+    }
+  }
+
+  return prisma.wishlistItem.create({
     data: {
-      userId,
-      name,
-      category,
-      ...(typeof targetPrice === "number" && !Number.isNaN(targetPrice)
-        ? { targetPrice }
-        : {}),
-      ...(typeof currentMarketValue === "number" &&
-      !Number.isNaN(currentMarketValue)
-        ? { currentMarketValue }
-        : {}),
-      ...(platform ? { platform } : {}),
-      ...(region ? { region } : {}),
-      ...(notes ? { notes } : {})
+      userId: input.userId,
+      name: input.name,
+      category: input.category || "other",
+      targetPrice: input.targetPrice ?? null,
+      currentMarketValue: input.currentMarketValue ?? null,
+      platform: input.platform || null,
+      region: input.region || null,
+      notes: input.notes || null
     }
   });
 }
 
 export async function deleteWishlistService(userId: string, id: string) {
-  const existing = await wishlistModel.findFirst({
+  const item = await prisma.wishlistItem.findFirst({
     where: {
       id,
       userId
     }
   });
 
-  if (!existing) {
-    return null;
+  if (!item) {
+    return false;
   }
 
-  await wishlistModel.delete({
+  await prisma.wishlistItem.delete({
     where: { id }
   });
 
