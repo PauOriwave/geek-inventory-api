@@ -11,19 +11,11 @@ export async function register(req: Request, res: Response) {
   try {
     const user = await createUser(email, password);
 
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        plan: user.plan
-      },
-      JWT_SECRET
-    );
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET);
 
     res.json({
       id: user.id,
       email: user.email,
-      plan: user.plan,
-      premiumStartedAt: user.premiumStartedAt,
       token
     });
   } catch {
@@ -40,19 +32,11 @@ export async function login(req: Request, res: Response) {
     return res.status(401).json({ message: "Invalid credentials" });
   }
 
-  const token = jwt.sign(
-    {
-      userId: user.id,
-      plan: user.plan
-    },
-    JWT_SECRET
-  );
+  const token = jwt.sign({ userId: user.id }, JWT_SECRET);
 
   res.json({
     id: user.id,
     email: user.email,
-    plan: user.plan,
-    premiumStartedAt: user.premiumStartedAt,
     token
   });
 }
@@ -67,21 +51,40 @@ export async function me(req: Request, res: Response) {
   }
 
   const user = await prisma.user.findUnique({
-    where: {
-      id: req.user.id
-    },
-    select: {
-      id: true,
-      email: true,
-      createdAt: true,
-      plan: true,
-      premiumStartedAt: true
-    }
+    where: { id: req.user.id }
+  });
+
+  return res.json({
+    id: user?.id,
+    email: user?.email,
+    plan: user?.plan ?? "free",
+    premiumSince: user?.premiumSince
+  });
+}
+
+/**
+ * 🔥 SOLO PARA TESTING (luego lo quitamos)
+ */
+export async function upgradeToPremium(req: Request, res: Response) {
+  if (!req.user?.id) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id }
   });
 
   if (!user) {
     return res.status(404).json({ message: "User not found" });
   }
 
-  return res.json(user);
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      plan: "premium",
+      premiumSince: user.premiumSince ?? new Date()
+    }
+  });
+
+  res.json(updated);
 }
