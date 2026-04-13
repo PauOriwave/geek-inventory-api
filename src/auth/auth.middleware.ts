@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../prisma/client";
+import { normalizePlan } from "../lib/plans";
 
-const JWT_SECRET = "dev-secret";
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
 export async function requireAuth(
   req: Request,
@@ -38,7 +39,7 @@ export async function requireAuth(
 
     req.user = {
       id: user.id,
-      plan: user.plan || "free"
+      plan: normalizePlan(user.plan)
     };
 
     next();

@@ -1,7 +1,24 @@
 import prisma from "../prisma/client";
+import {
+  getWishlistLimitByPlan,
+  normalizePlan
+} from "../lib/plans";
+
+export class FreeWishlistLimitError extends Error {
+  code: string;
+  limit: number;
+
+  constructor(limit: number, message?: string) {
+    super(message ?? `Plan wishlist limit reached (${limit} items)`);
+    this.name = "FreeWishlistLimitError";
+    this.code = "WISHLIST_LIMIT_REACHED";
+    this.limit = limit;
+  }
+}
 
 type CreateWishlistInput = {
   userId: string;
+  plan?: string;
   name: string;
   category?: string;
   targetPrice?: number;
@@ -31,16 +48,19 @@ export async function createWishlistService(input: CreateWishlistInput) {
     throw new Error("User not found");
   }
 
-  if ((user.plan || "free") === "free") {
+  const effectivePlan = normalizePlan(input.plan ?? user.plan ?? "free");
+  const wishlistLimit = getWishlistLimitByPlan(effectivePlan);
+
+  if (wishlistLimit != null) {
     const count = await prisma.wishlistItem.count({
       where: { userId: input.userId }
     });
 
-    if (count >= 10) {
-      const error = new Error("Free wishlist limit reached (10 items)");
-      (error as Error & { code?: string }).code =
-        "FREE_WISHLIST_LIMIT_REACHED";
-      throw error;
+    if (count >= wishlistLimit) {
+      throw new FreeWishlistLimitError(
+        wishlistLimit,
+        `Plan wishlist limit reached (${wishlistLimit} items)`
+      );
     }
   }
 

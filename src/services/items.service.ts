@@ -1,12 +1,18 @@
 import prisma from "../prisma/client";
+import {
+  getItemLimitByPlan,
+  normalizePlan
+} from "../lib/plans";
 
 export class FreePlanLimitError extends Error {
   code: string;
+  limit: number;
 
-  constructor(message = "Free plan limit reached (25 items)") {
-    super(message);
+  constructor(limit: number, message?: string) {
+    super(message ?? `Plan item limit reached (${limit} items)`);
     this.name = "FreePlanLimitError";
-    this.code = "FREE_ITEM_LIMIT_REACHED";
+    this.code = "ITEM_LIMIT_REACHED";
+    this.limit = limit;
   }
 }
 
@@ -54,15 +60,19 @@ export async function createItemService(input: CreateItemInput) {
     throw new Error("User not found");
   }
 
-  const effectivePlan = input.plan ?? user.plan ?? "free";
+  const effectivePlan = normalizePlan(input.plan ?? user.plan ?? "free");
+  const itemLimit = getItemLimitByPlan(effectivePlan);
 
-  if (effectivePlan === "free") {
+  if (itemLimit != null) {
     const count = await prisma.item.count({
       where: { userId: input.userId }
     });
 
-    if (count >= 25) {
-      throw new FreePlanLimitError();
+    if (count >= itemLimit) {
+      throw new FreePlanLimitError(
+        itemLimit,
+        `Plan item limit reached (${itemLimit} items)`
+      );
     }
   }
 
