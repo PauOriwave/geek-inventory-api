@@ -8,12 +8,16 @@ import itemsRoutes from "./routes/items.routes";
 import wishlistRoutes from "./routes/wishlist.routes";
 import achievementsRoutes from "./routes/achievements.routes";
 import statsRoutes from "./routes/stats.routes";
+import usersRoutes from "./routes/users.routes";
 
 const app = express();
 
 app.use(
   cors({
-    origin: ["http://localhost:3001"],
+    origin: [
+      "http://localhost:3001",
+      "http://192.168.0.18:3001"
+    ],
     credentials: true
   })
 );
@@ -30,6 +34,7 @@ app.use("/items", itemsRoutes);
 app.use("/wishlist", wishlistRoutes);
 app.use("/achievements", achievementsRoutes);
 app.use("/stats", statsRoutes);
+app.use("/users", usersRoutes);
 
 const PORT = Number(process.env.PORT) || 4000;
 
