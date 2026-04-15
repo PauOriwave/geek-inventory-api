@@ -1,9 +1,10 @@
+import { Prisma } from "@prisma/client";
 import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../prisma/client";
 import { createUser, loginUser } from "./auth.service";
 
-const JWT_SECRET = "dev-secret";
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
 function buildToken(userId: string) {
   return jwt.sign({ userId }, JWT_SECRET, {
@@ -15,7 +16,7 @@ function setSessionCookie(res: Response, token: string) {
   res.cookie("session", token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 1000 * 60 * 60 * 24 * 30
   });
@@ -37,38 +38,62 @@ export async function register(req: Request, res: Response) {
       premiumStartedAt: user.premiumStartedAt,
       token
     });
-  } catch {
-    return res.status(400).json({ message: "User already exists" });
+  } catch (error) {
+    console.error("register error:", error);
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      return res.status(409).json({ message: "User already exists" });
+    }
+
+    return res.status(500).json({
+      message:
+        error instanceof Error && error.message
+          ? error.message
+          : "Could not register user"
+    });
   }
 }
 
 export async function login(req: Request, res: Response) {
   const { email, password } = req.body;
 
-  const user = await loginUser(email, password);
+  try {
+    const user = await loginUser(email, password);
 
-  if (!user) {
-    return res.status(401).json({ message: "Invalid credentials" });
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const token = buildToken(user.id);
+
+    setSessionCookie(res, token);
+
+    return res.json({
+      id: user.id,
+      email: user.email,
+      plan: user.plan ?? "free",
+      premiumStartedAt: user.premiumStartedAt,
+      token
+    });
+  } catch (error) {
+    console.error("login error:", error);
+    return res.status(500).json({
+      message:
+        error instanceof Error && error.message
+          ? error.message
+          : "Could not log in"
+    });
   }
-
-  const token = buildToken(user.id);
-
-  setSessionCookie(res, token);
-
-  return res.json({
-    id: user.id,
-    email: user.email,
-    plan: user.plan ?? "free",
-    premiumStartedAt: user.premiumStartedAt,
-    token
-  });
 }
 
 export async function logout(_req: Request, res: Response) {
   res.clearCookie("session", {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: process.env.NODE_ENV === "production",
     path: "/"
   });
 
