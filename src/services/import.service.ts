@@ -121,8 +121,8 @@ export async function importItemsFromCsv(params: {
         await prisma.itemValuationSnapshot.create({
           data: {
             itemId: existing.id,
+            source: "import_update",
             marketValue: price,
-            source: "import",
             confidence: 0.3
           }
         });
@@ -130,11 +130,11 @@ export async function importItemsFromCsv(params: {
         updated++;
       } else {
         if (itemLimit != null) {
-          const currentCount = await prisma.item.count({
+          const count = await prisma.item.count({
             where: { userId }
           });
 
-          if (currentCount >= itemLimit) {
+          if (count >= itemLimit) {
             throw new FreePlanLimitError(
               itemLimit,
               `Plan item limit reached (${itemLimit} items)`
@@ -160,8 +160,8 @@ export async function importItemsFromCsv(params: {
         await prisma.itemValuationSnapshot.create({
           data: {
             itemId: item.id,
-            marketValue: price,
             source: "import",
+            marketValue: price,
             confidence: 0.3
           }
         });

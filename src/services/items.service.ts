@@ -76,7 +76,7 @@ export async function createItemService(input: CreateItemInput) {
     }
   }
 
-  return prisma.item.create({
+  const item = await prisma.item.create({
     data: {
       userId: input.userId,
       name: input.name,
@@ -90,6 +90,19 @@ export async function createItemService(input: CreateItemInput) {
       notes: input.notes || null
     }
   });
+
+  if (input.estimatedPrice > 0) {
+    await prisma.itemValuationSnapshot.create({
+      data: {
+        itemId: item.id,
+        source: "manual",
+        marketValue: input.estimatedPrice,
+        confidence: 0.3
+      }
+    });
+  }
+
+  return item;
 }
 
 export async function listItemsService(input: ListItemsInput) {
@@ -182,23 +195,10 @@ export async function getItemSnapshotsService(userId: string, id: string) {
     return null;
   }
 
-  const prismaAny = prisma as any;
-
-  if (prismaAny.itemValuationSnapshot?.findMany) {
-    return prismaAny.itemValuationSnapshot.findMany({
-      where: { itemId: id },
-      orderBy: { recordedAt: "desc" }
-    });
-  }
-
-  if (prismaAny.itemSnapshot?.findMany) {
-    return prismaAny.itemSnapshot.findMany({
-      where: { itemId: id },
-      orderBy: { createdAt: "desc" }
-    });
-  }
-
-  return [];
+  return prisma.itemValuationSnapshot.findMany({
+    where: { itemId: id },
+    orderBy: { recordedAt: "desc" }
+  });
 }
 
 export async function updateItemService(
@@ -217,7 +217,7 @@ export async function updateItemService(
     return null;
   }
 
-  return prisma.item.update({
+  const updated = await prisma.item.update({
     where: { id },
     data: {
       ...(data.quantity != null ? { quantity: data.quantity } : {}),
@@ -237,6 +237,23 @@ export async function updateItemService(
       ...(data.notes !== undefined ? { notes: data.notes || null } : {})
     }
   });
+
+  if (
+    data.estimatedPrice != null &&
+    data.estimatedPrice > 0 &&
+    data.estimatedPrice !== Number(item.estimatedPrice)
+  ) {
+    await prisma.itemValuationSnapshot.create({
+      data: {
+        itemId: id,
+        source: "manual_update",
+        marketValue: data.estimatedPrice,
+        confidence: 0.3
+      }
+    });
+  }
+
+  return updated;
 }
 
 export async function deleteItemService(userId: string, id: string) {
