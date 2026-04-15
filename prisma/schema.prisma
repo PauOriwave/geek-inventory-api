@@ -32,30 +32,30 @@ model User {
 }
 
 model Item {
-  id             String   @id @default(uuid())
-  name           String
-  category       String
-  estimatedPrice Decimal
-  quantity       Int
+  id                  String   @id @default(uuid())
+  name                String
+  category            String
+  estimatedPrice      Decimal
+  quantity            Int
 
   marketValue         Decimal?
   valuationSource     String?
   valuationConfidence Float?
   lastValuationAt     DateTime?
 
-  condition      String?
-  notes          String?
-  platform       String?
-  completeness   String?
-  region         String?
+  condition           String?
+  notes               String?
+  platform            String?
+  completeness        String?
+  region              String?
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  userId         String
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  snapshots      ItemValuationSnapshot[]
+  snapshots           ItemValuationSnapshot[]
 }
 
 model ItemValuationSnapshot {
@@ -85,4 +85,16 @@ model WishlistItem {
 
   userId             String
   user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PriceCache {
+  id         String   @id @default(uuid())
+  key        String   @unique
+  price      Decimal
+  source     String
+  confidence Float
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([key])
 }
