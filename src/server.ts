@@ -9,6 +9,7 @@ import wishlistRoutes from "./routes/wishlist.routes";
 import achievementsRoutes from "./routes/achievements.routes";
 import statsRoutes from "./routes/stats.routes";
 import usersRoutes from "./routes/users.routes";
+import importRoutes from "./routes/import.routes";
 
 const app = express();
 
@@ -35,6 +36,9 @@ app.use("/wishlist", wishlistRoutes);
 app.use("/achievements", achievementsRoutes);
 app.use("/stats", statsRoutes);
 app.use("/users", usersRoutes);
+
+// 🔥 aseguramos que el import está montado
+app.use("/import", importRoutes);
 
 const PORT = Number(process.env.PORT) || 4000;
 

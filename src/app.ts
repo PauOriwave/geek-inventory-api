@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-
+import importRoutes from "./routes/import.routes";
 import authRoutes from "./auth/auth.routes";
 import itemsRoutes from "./routes/items.routes";
 import statsRoutes from "./routes/stats.routes";
@@ -28,5 +28,6 @@ app.use("/items", itemsRoutes);
 app.use("/stats", statsRoutes);
 app.use("/achievements", achievementsRoutes);
 app.use("/wishlist", wishlistRoutes);
+app.use("/import", importRoutes)
 
 export default app;
