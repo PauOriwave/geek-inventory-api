@@ -28,9 +28,12 @@ type TopItemRow = {
   totalValue: number;
 };
 
+type HistoryPointSource = "manual" | "import" | "valuation";
+
 type HistoryPoint = {
   date: string;
   total: number;
+  source: HistoryPointSource;
 };
 
 type TrendingItemRow = {
@@ -80,6 +83,20 @@ function buildWhere({
   }
 
   return where;
+}
+
+function normalizeHistorySource(source?: string | null): HistoryPointSource {
+  const value = (source ?? "").toLowerCase();
+
+  if (value === "manual" || value === "manual_update") {
+    return "manual";
+  }
+
+  if (value === "import" || value === "import_update") {
+    return "import";
+  }
+
+  return "valuation";
 }
 
 export async function getSummaryService(params: SummaryParams) {
@@ -237,7 +254,8 @@ export async function getCollectionHistoryService(
         },
         select: {
           marketValue: true,
-          recordedAt: true
+          recordedAt: true,
+          source: true
         }
       }
     }
@@ -247,6 +265,7 @@ export async function getCollectionHistoryService(
     itemId: string;
     recordedAt: Date;
     totalForItem: number;
+    source: HistoryPointSource;
   }> = [];
 
   for (const item of items) {
@@ -254,14 +273,15 @@ export async function getCollectionHistoryService(
       events.push({
         itemId: item.id,
         recordedAt: snapshot.recordedAt,
-        totalForItem: Number(snapshot.marketValue) * item.quantity
+        totalForItem: Number(snapshot.marketValue) * item.quantity,
+        source: normalizeHistorySource(snapshot.source)
       });
     }
   }
 
   events.sort((a, b) => {
-    const timeDiff = a.recordedAt.getTime() - b.recordedAt.getTime();
-    if (timeDiff !== 0) return timeDiff;
+    const diff = a.recordedAt.getTime() - b.recordedAt.getTime();
+    if (diff !== 0) return diff;
     return a.itemId.localeCompare(b.itemId);
   });
 
@@ -280,10 +300,12 @@ export async function getCollectionHistoryService(
 
     if (lastPoint && lastPoint.date === pointDate) {
       lastPoint.total = pointTotal;
+      lastPoint.source = event.source;
     } else {
       history.push({
         date: pointDate,
-        total: pointTotal
+        total: pointTotal,
+        source: event.source
       });
     }
   }
