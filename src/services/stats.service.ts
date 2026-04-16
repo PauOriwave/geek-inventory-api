@@ -28,12 +28,14 @@ type TopItemRow = {
   totalValue: number;
 };
 
-type HistoryPointSource = "manual" | "import" | "valuation";
-
 type HistoryPoint = {
   date: string;
   total: number;
-  source: HistoryPointSource;
+};
+
+type CollectionHistoryResponse = {
+  base: HistoryPoint[];
+  market: HistoryPoint[];
 };
 
 type TrendingItemRow = {
@@ -85,18 +87,33 @@ function buildWhere({
   return where;
 }
 
-function normalizeHistorySource(source?: string | null): HistoryPointSource {
+function normalizeSnapshotSource(source?: string | null) {
   const value = (source ?? "").toLowerCase();
 
-  if (value === "manual" || value === "manual_update") {
-    return "manual";
+  if (
+    value === "manual" ||
+    value === "manual_update" ||
+    value === "import" ||
+    value === "import_update"
+  ) {
+    return "base" as const;
   }
 
-  if (value === "import" || value === "import_update") {
-    return "import";
+  return "market" as const;
+}
+
+function upsertSeriesPoint(
+  series: HistoryPoint[],
+  point: HistoryPoint
+): void {
+  const last = series[series.length - 1];
+
+  if (last && last.date === point.date) {
+    last.total = point.total;
+    return;
   }
 
-  return "valuation";
+  series.push(point);
 }
 
 export async function getSummaryService(params: SummaryParams) {
@@ -239,7 +256,7 @@ export async function getTopItemsService(
 export async function getCollectionHistoryService(
   userId: string,
   category?: string
-): Promise<HistoryPoint[]> {
+): Promise<CollectionHistoryResponse> {
   const items = await prisma.item.findMany({
     where: {
       userId,
@@ -265,7 +282,7 @@ export async function getCollectionHistoryService(
     itemId: string;
     recordedAt: Date;
     totalForItem: number;
-    source: HistoryPointSource;
+    kind: "base" | "market";
   }> = [];
 
   for (const item of items) {
@@ -274,7 +291,7 @@ export async function getCollectionHistoryService(
         itemId: item.id,
         recordedAt: snapshot.recordedAt,
         totalForItem: Number(snapshot.marketValue) * item.quantity,
-        source: normalizeHistorySource(snapshot.source)
+        kind: normalizeSnapshotSource(snapshot.source)
       });
     }
   }
@@ -285,32 +302,45 @@ export async function getCollectionHistoryService(
     return a.itemId.localeCompare(b.itemId);
   });
 
-  const latestPerItem = new Map<string, number>();
-  const history: HistoryPoint[] = [];
-  let collectionTotal = 0;
+  const latestBasePerItem = new Map<string, number>();
+  const latestMarketPerItem = new Map<string, number>();
+
+  const base: HistoryPoint[] = [];
+  const market: HistoryPoint[] = [];
+
+  let baseTotal = 0;
+  let marketTotal = 0;
 
   for (const event of events) {
-    const previousItemTotal = latestPerItem.get(event.itemId) ?? 0;
-    collectionTotal += event.totalForItem - previousItemTotal;
-    latestPerItem.set(event.itemId, event.totalForItem);
-
     const pointDate = event.recordedAt.toISOString();
-    const pointTotal = Number(collectionTotal.toFixed(2));
-    const lastPoint = history[history.length - 1];
 
-    if (lastPoint && lastPoint.date === pointDate) {
-      lastPoint.total = pointTotal;
-      lastPoint.source = event.source;
-    } else {
-      history.push({
+    if (event.kind === "base") {
+      const previous = latestBasePerItem.get(event.itemId) ?? 0;
+      baseTotal += event.totalForItem - previous;
+      latestBasePerItem.set(event.itemId, event.totalForItem);
+
+      upsertSeriesPoint(base, {
         date: pointDate,
-        total: pointTotal,
-        source: event.source
+        total: Number(baseTotal.toFixed(2))
+      });
+    }
+
+    if (event.kind === "market") {
+      const previous = latestMarketPerItem.get(event.itemId) ?? 0;
+      marketTotal += event.totalForItem - previous;
+      latestMarketPerItem.set(event.itemId, event.totalForItem);
+
+      upsertSeriesPoint(market, {
+        date: pointDate,
+        total: Number(marketTotal.toFixed(2))
       });
     }
   }
 
-  return history;
+  return {
+    base,
+    market
+  };
 }
 
 export async function getTrendingItemsService(
