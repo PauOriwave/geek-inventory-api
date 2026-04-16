@@ -157,7 +157,9 @@ export async function getByCategoryService(
 
     if (item.snapshots.length >= 2) {
       const first = Number(item.snapshots[0].marketValue);
-      const latest = Number(item.snapshots[item.snapshots.length - 1].marketValue);
+      const latest = Number(
+        item.snapshots[item.snapshots.length - 1].marketValue
+      );
       current.trendDelta += latest - first;
     }
 
@@ -209,7 +211,9 @@ export async function getTopItemsService(
       category: item.category,
       quantity: item.quantity,
       estimatedPrice: Number(item.estimatedPrice),
-      totalValue: Number((Number(item.estimatedPrice) * item.quantity).toFixed(2))
+      totalValue: Number(
+        (Number(item.estimatedPrice) * item.quantity).toFixed(2)
+      )
     }))
     .sort((a, b) => b.totalValue - a.totalValue)
     .slice(0, limit);
@@ -239,22 +243,52 @@ export async function getCollectionHistoryService(
     }
   });
 
-  const totalsByDate = new Map<string, number>();
+  const events: Array<{
+    itemId: string;
+    recordedAt: Date;
+    totalForItem: number;
+  }> = [];
 
   for (const item of items) {
     for (const snapshot of item.snapshots) {
-      const date = snapshot.recordedAt.toISOString().slice(0, 10);
-      const value = Number(snapshot.marketValue) * item.quantity;
-      totalsByDate.set(date, (totalsByDate.get(date) ?? 0) + value);
+      events.push({
+        itemId: item.id,
+        recordedAt: snapshot.recordedAt,
+        totalForItem: Number(snapshot.marketValue) * item.quantity
+      });
     }
   }
 
-  return [...totalsByDate.entries()]
-    .map(([date, total]) => ({
-      date,
-      total: Number(total.toFixed(2))
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  events.sort((a, b) => {
+    const timeDiff = a.recordedAt.getTime() - b.recordedAt.getTime();
+    if (timeDiff !== 0) return timeDiff;
+    return a.itemId.localeCompare(b.itemId);
+  });
+
+  const latestPerItem = new Map<string, number>();
+  const history: HistoryPoint[] = [];
+  let collectionTotal = 0;
+
+  for (const event of events) {
+    const previousItemTotal = latestPerItem.get(event.itemId) ?? 0;
+    collectionTotal += event.totalForItem - previousItemTotal;
+    latestPerItem.set(event.itemId, event.totalForItem);
+
+    const pointDate = event.recordedAt.toISOString();
+    const pointTotal = Number(collectionTotal.toFixed(2));
+    const lastPoint = history[history.length - 1];
+
+    if (lastPoint && lastPoint.date === pointDate) {
+      lastPoint.total = pointTotal;
+    } else {
+      history.push({
+        date: pointDate,
+        total: pointTotal
+      });
+    }
+  }
+
+  return history;
 }
 
 export async function getTrendingItemsService(
@@ -290,7 +324,9 @@ export async function getTrendingItemsService(
     if (item.snapshots.length < 2) continue;
 
     const firstValue = Number(item.snapshots[0].marketValue);
-    const latestValue = Number(item.snapshots[item.snapshots.length - 1].marketValue);
+    const latestValue = Number(
+      item.snapshots[item.snapshots.length - 1].marketValue
+    );
     const delta = Number((latestValue - firstValue).toFixed(2));
 
     if (direction === "rising" && delta <= 0) continue;
