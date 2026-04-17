@@ -9,6 +9,7 @@ type SummaryParams = {
 };
 
 type TrendKind = "rising" | "dropping" | "stable";
+type HistoryRange = "7d" | "30d" | "90d" | "all";
 
 type ByCategoryRow = {
   category: string;
@@ -114,6 +115,20 @@ function upsertSeriesPoint(
   }
 
   series.push(point);
+}
+
+function getRangeStartDate(range: HistoryRange): Date | null {
+  if (range === "all") {
+    return null;
+  }
+
+  const now = new Date();
+  const days =
+    range === "7d" ? 7 :
+    range === "30d" ? 30 :
+    90;
+
+  return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 }
 
 export async function getSummaryService(params: SummaryParams) {
@@ -255,7 +270,8 @@ export async function getTopItemsService(
 
 export async function getCollectionHistoryService(
   userId: string,
-  category?: string
+  category?: string,
+  range: HistoryRange = "all"
 ): Promise<CollectionHistoryResponse> {
   const items = await prisma.item.findMany({
     where: {
@@ -278,6 +294,8 @@ export async function getCollectionHistoryService(
     }
   });
 
+  const rangeStart = getRangeStartDate(range);
+
   const events: Array<{
     itemId: string;
     recordedAt: Date;
@@ -287,6 +305,10 @@ export async function getCollectionHistoryService(
 
   for (const item of items) {
     for (const snapshot of item.snapshots) {
+      if (rangeStart && snapshot.recordedAt < rangeStart) {
+        continue;
+      }
+
       events.push({
         itemId: item.id,
         recordedAt: snapshot.recordedAt,
