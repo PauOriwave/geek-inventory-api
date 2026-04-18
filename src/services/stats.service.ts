@@ -296,6 +296,13 @@ export async function getCollectionHistoryService(
 
   const rangeStart = getRangeStartDate(range);
 
+  console.log("[collection-history] range =", range);
+  console.log(
+    "[collection-history] rangeStart =",
+    rangeStart ? rangeStart.toISOString() : "all"
+  );
+  console.log("[collection-history] items =", items.length);
+
   const events: Array<{
     itemId: string;
     recordedAt: Date;
@@ -303,9 +310,12 @@ export async function getCollectionHistoryService(
     kind: "base" | "market";
   }> = [];
 
+  let skippedByRange = 0;
+
   for (const item of items) {
     for (const snapshot of item.snapshots) {
       if (rangeStart && snapshot.recordedAt < rangeStart) {
+        skippedByRange++;
         continue;
       }
 
@@ -318,11 +328,29 @@ export async function getCollectionHistoryService(
     }
   }
 
+  console.log("[collection-history] skippedByRange =", skippedByRange);
+  console.log("[collection-history] events after filter =", events.length);
+
   events.sort((a, b) => {
     const diff = a.recordedAt.getTime() - b.recordedAt.getTime();
     if (diff !== 0) return diff;
     return a.itemId.localeCompare(b.itemId);
   });
+
+  if (events.length > 0) {
+    console.log(
+      "[collection-history] first event =",
+      events[0].recordedAt.toISOString(),
+      events[0].kind
+    );
+    console.log(
+      "[collection-history] last event =",
+      events[events.length - 1].recordedAt.toISOString(),
+      events[events.length - 1].kind
+    );
+  } else {
+    console.log("[collection-history] no events after filter");
+  }
 
   const latestBasePerItem = new Map<string, number>();
   const latestMarketPerItem = new Map<string, number>();
@@ -358,6 +386,9 @@ export async function getCollectionHistoryService(
       });
     }
   }
+
+  console.log("[collection-history] base points =", base.length);
+  console.log("[collection-history] market points =", market.length);
 
   return {
     base,
