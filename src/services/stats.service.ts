@@ -50,6 +50,29 @@ type TrendingItemRow = {
 
 type TrendingDirection = "rising" | "dropping";
 
+type MarketGapRow = {
+  id: string;
+  name: string;
+  category: string;
+  estimatedPrice: number;
+  marketValue: number;
+  gap: number;
+  gapPercent: number | null;
+};
+
+type MarketOverviewResponse = {
+  summary: {
+    trackedItems: number;
+    baseTotalValue: number;
+    marketTotalValue: number;
+    totalGap: number;
+    totalGapPercent: number | null;
+  };
+  rising: TrendingItemRow[];
+  dropping: TrendingItemRow[];
+  biggestGaps: MarketGapRow[];
+};
+
 function buildWhere({
   userId,
   q,
@@ -103,10 +126,7 @@ function normalizeSnapshotSource(source?: string | null) {
   return "market" as const;
 }
 
-function upsertSeriesPoint(
-  series: HistoryPoint[],
-  point: HistoryPoint
-): void {
+function upsertSeriesPoint(series: HistoryPoint[], point: HistoryPoint): void {
   const last = series[series.length - 1];
 
   if (last && last.date === point.date) {
@@ -123,10 +143,7 @@ function getRangeStartDate(range: HistoryRange): Date | null {
   }
 
   const now = new Date();
-  const days =
-    range === "7d" ? 7 :
-    range === "30d" ? 30 :
-    90;
+  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
 
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 }
@@ -296,13 +313,6 @@ export async function getCollectionHistoryService(
 
   const rangeStart = getRangeStartDate(range);
 
-  console.log("[collection-history] range =", range);
-  console.log(
-    "[collection-history] rangeStart =",
-    rangeStart ? rangeStart.toISOString() : "all"
-  );
-  console.log("[collection-history] items =", items.length);
-
   const events: Array<{
     itemId: string;
     recordedAt: Date;
@@ -310,12 +320,9 @@ export async function getCollectionHistoryService(
     kind: "base" | "market";
   }> = [];
 
-  let skippedByRange = 0;
-
   for (const item of items) {
     for (const snapshot of item.snapshots) {
       if (rangeStart && snapshot.recordedAt < rangeStart) {
-        skippedByRange++;
         continue;
       }
 
@@ -328,29 +335,11 @@ export async function getCollectionHistoryService(
     }
   }
 
-  console.log("[collection-history] skippedByRange =", skippedByRange);
-  console.log("[collection-history] events after filter =", events.length);
-
   events.sort((a, b) => {
     const diff = a.recordedAt.getTime() - b.recordedAt.getTime();
     if (diff !== 0) return diff;
     return a.itemId.localeCompare(b.itemId);
   });
-
-  if (events.length > 0) {
-    console.log(
-      "[collection-history] first event =",
-      events[0].recordedAt.toISOString(),
-      events[0].kind
-    );
-    console.log(
-      "[collection-history] last event =",
-      events[events.length - 1].recordedAt.toISOString(),
-      events[events.length - 1].kind
-    );
-  } else {
-    console.log("[collection-history] no events after filter");
-  }
 
   const latestBasePerItem = new Map<string, number>();
   const latestMarketPerItem = new Map<string, number>();
@@ -386,9 +375,6 @@ export async function getCollectionHistoryService(
       });
     }
   }
-
-  console.log("[collection-history] base points =", base.length);
-  console.log("[collection-history] market points =", market.length);
 
   return {
     base,
@@ -452,4 +438,87 @@ export async function getTrendingItemsService(
       direction === "rising" ? b.delta - a.delta : a.delta - b.delta
     )
     .slice(0, limit);
+}
+
+export async function getMarketOverviewService(
+  userId: string,
+  category?: string
+): Promise<MarketOverviewResponse> {
+  const items = await prisma.item.findMany({
+    where: {
+      userId,
+      ...(category ? { category } : {})
+    },
+    select: {
+      id: true,
+      name: true,
+      category: true,
+      quantity: true,
+      estimatedPrice: true,
+      marketValue: true,
+      snapshots: {
+        orderBy: {
+          recordedAt: "asc"
+        },
+        select: {
+          marketValue: true
+        }
+      }
+    }
+  });
+
+  const trackedItems = items.filter((item) => item.marketValue != null);
+
+  const baseTotalValue = trackedItems.reduce(
+    (acc, item) => acc + Number(item.estimatedPrice) * item.quantity,
+    0
+  );
+
+  const marketTotalValue = trackedItems.reduce(
+    (acc, item) => acc + Number(item.marketValue ?? 0) * item.quantity,
+    0
+  );
+
+  const totalGap = marketTotalValue - baseTotalValue;
+  const totalGapPercent =
+    baseTotalValue > 0 ? (totalGap / baseTotalValue) * 100 : null;
+
+  const biggestGaps: MarketGapRow[] = trackedItems
+    .map((item) => {
+      const estimatedPrice = Number(item.estimatedPrice);
+      const marketValue = Number(item.marketValue ?? 0);
+      const gap = marketValue - estimatedPrice;
+      const gapPercent =
+        estimatedPrice > 0 ? (gap / estimatedPrice) * 100 : null;
+
+      return {
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        estimatedPrice: Number(estimatedPrice.toFixed(2)),
+        marketValue: Number(marketValue.toFixed(2)),
+        gap: Number(gap.toFixed(2)),
+        gapPercent:
+          gapPercent == null ? null : Number(gapPercent.toFixed(2))
+      };
+    })
+    .sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap))
+    .slice(0, 8);
+
+  const rising = await getTrendingItemsService(userId, "rising", 5, category);
+  const dropping = await getTrendingItemsService(userId, "dropping", 5, category);
+
+  return {
+    summary: {
+      trackedItems: trackedItems.length,
+      baseTotalValue: Number(baseTotalValue.toFixed(2)),
+      marketTotalValue: Number(marketTotalValue.toFixed(2)),
+      totalGap: Number(totalGap.toFixed(2)),
+      totalGapPercent:
+        totalGapPercent == null ? null : Number(totalGapPercent.toFixed(2))
+    },
+    rising,
+    dropping,
+    biggestGaps
+  };
 }

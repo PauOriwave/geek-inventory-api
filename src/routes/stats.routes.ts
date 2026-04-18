@@ -4,7 +4,8 @@ import {
   getByCategory,
   getTopItems,
   getCollectionHistory,
-  getTrendingItems
+  getTrendingItems,
+  getMarketOverview
 } from "../controllers/stats.controller";
 import { requireAuth } from "../auth/auth.middleware";
 
@@ -15,5 +16,6 @@ router.get("/by-category", requireAuth, getByCategory);
 router.get("/top-items", requireAuth, getTopItems);
 router.get("/collection-history", requireAuth, getCollectionHistory);
 router.get("/trending-items", requireAuth, getTrendingItems);
+router.get("/market-overview", requireAuth, getMarketOverview);
 
 export default router;

@@ -4,7 +4,8 @@ import {
   getByCategoryService,
   getTopItemsService,
   getCollectionHistoryService,
-  getTrendingItemsService
+  getTrendingItemsService,
+  getMarketOverviewService
 } from "../services/stats.service";
 
 type HistoryRange = "7d" | "30d" | "90d" | "all";
@@ -136,5 +137,23 @@ export async function getTrendingItems(req: Request, res: Response) {
     return res.json(data);
   } catch {
     return res.status(500).json({ message: "Failed to fetch trending items" });
+  }
+}
+
+export async function getMarketOverview(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    const category =
+      typeof req.query.category === "string" ? req.query.category : undefined;
+
+    const data = await getMarketOverviewService(userId, category);
+    return res.json(data);
+  } catch {
+    return res.status(500).json({ message: "Failed to fetch market overview" });
   }
 }
