@@ -11,7 +11,7 @@ import statsRoutes from "./routes/stats.routes";
 import usersRoutes from "./routes/users.routes";
 import importRoutes from "./routes/import.routes";
 import internalRoutes from "./routes/internal.routes";
-
+import { startValuationCron } from "./jobs/valuation.cron";
 
 const app = express();
 
@@ -43,8 +43,11 @@ app.use("/internal", internalRoutes);
 // 🔥 aseguramos que el import está montado
 app.use("/import", importRoutes);
 
+
 const PORT = Number(process.env.PORT) || 4000;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on http://localhost:${PORT}`);
 });
+
+startValuationCron();

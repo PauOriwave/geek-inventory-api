@@ -9,6 +9,7 @@ import achievementsRoutes from "./routes/achievements.routes";
 import wishlistRoutes from "./routes/wishlist.routes";
 import internalRoutes from "./routes/internal.routes";
 
+
 const app = express();
 
 app.use(
@@ -31,5 +32,7 @@ app.use("/achievements", achievementsRoutes);
 app.use("/wishlist", wishlistRoutes);
 app.use("/import", importRoutes)
 app.use("/internal", internalRoutes);
+
+
 
 export default app;
