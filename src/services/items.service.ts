@@ -51,6 +51,22 @@ type UpdateItemInput = {
   notes?: string;
 };
 
+function hasValuationIdentityChanged(
+  current: {
+    platform: string | null;
+    region: string | null;
+  },
+  incoming: UpdateItemInput
+) {
+  const nextPlatform =
+    incoming.platform !== undefined ? incoming.platform || null : current.platform;
+
+  const nextRegion =
+    incoming.region !== undefined ? incoming.region || null : current.region;
+
+  return nextPlatform !== current.platform || nextRegion !== current.region;
+}
+
 export async function createItemService(input: CreateItemInput) {
   const user = await prisma.user.findUnique({
     where: { id: input.userId }
@@ -87,7 +103,11 @@ export async function createItemService(input: CreateItemInput) {
       platform: input.platform || null,
       completeness: input.completeness || null,
       region: input.region || null,
-      notes: input.notes || null
+      notes: input.notes || null,
+      marketValue: null,
+      valuationSource: null,
+      valuationConfidence: null,
+      lastValuationAt: null
     }
   });
 
@@ -217,6 +237,8 @@ export async function updateItemService(
     return null;
   }
 
+  const shouldInvalidateStoredValuation = hasValuationIdentityChanged(item, data);
+
   const updated = await prisma.item.update({
     where: { id },
     data: {
@@ -234,7 +256,15 @@ export async function updateItemService(
         ? { completeness: data.completeness || null }
         : {}),
       ...(data.region !== undefined ? { region: data.region || null } : {}),
-      ...(data.notes !== undefined ? { notes: data.notes || null } : {})
+      ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
+      ...(shouldInvalidateStoredValuation
+        ? {
+            marketValue: null,
+            valuationSource: null,
+            valuationConfidence: null,
+            lastValuationAt: null
+          }
+        : {})
     }
   });
 

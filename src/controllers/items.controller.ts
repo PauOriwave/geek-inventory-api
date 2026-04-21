@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { Request, Response } from "express";
 import prisma from "../prisma/client";
 import {
@@ -21,6 +22,28 @@ function toOptionalNumber(value: unknown): number | undefined {
   }
 
   return undefined;
+}
+
+function getStoredValuationFromItem(item: {
+  marketValue: Prisma.Decimal | null;
+  valuationSource: string | null;
+  valuationConfidence: number | null;
+  lastValuationAt: Date | null;
+}) {
+  if (
+    item.marketValue == null ||
+    item.valuationSource == null ||
+    item.valuationConfidence == null
+  ) {
+    return null;
+  }
+
+  return {
+    price: item.marketValue.toNumber(),
+    source: item.valuationSource,
+    confidence: Number(item.valuationConfidence),
+    lastValuationAt: item.lastValuationAt
+  };
 }
 
 export const listItems = async (req: Request, res: Response) => {
@@ -267,38 +290,32 @@ export const valuateItem = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Item not found" });
     }
 
-    const valuation = await getValuation(item);
+    const cachedValuation = await getValuation(item, { allowStale: true });
+    const persistedValuation = getStoredValuationFromItem(item);
+
+    const valuation = cachedValuation ?? persistedValuation;
 
     if (!valuation) {
-      return res.status(400).json({
-        message: "No valuation found for this item right now",
-        code: "NO_VALUATION_FOUND"
+      return res.status(404).json({
+        message: "No stored valuation found for this item",
+        code: "NO_STORED_VALUATION"
       });
     }
 
-    const updated = await prisma.item.update({
-      where: { id },
-      data: {
-        marketValue: valuation.price,
-        valuationSource: valuation.source,
-        valuationConfidence: valuation.confidence,
-        lastValuationAt: new Date()
-      }
-    });
-
-    await prisma.itemValuationSnapshot.create({
-      data: {
-        itemId: id,
+    return res.json({
+      itemId: item.id,
+      valuation: {
+        price: valuation.price,
         source: valuation.source,
-        marketValue: valuation.price,
         confidence: valuation.confidence
-      }
+      },
+      lastValuationAt:
+        "lastValuationAt" in valuation ? valuation.lastValuationAt : item.lastValuationAt,
+      stale: item.lastValuationAt == null
     });
-
-    return res.json(updated);
   } catch (err) {
     console.error("valuateItem error:", err);
-    return res.status(500).json({ message: "Error valuating item" });
+    return res.status(500).json({ message: "Error reading item valuation" });
   }
 };
 
@@ -315,48 +332,53 @@ export const valuateAllItems = async (req: Request, res: Response) => {
     });
 
     let processed = 0;
-    let updated = 0;
-    let skipped = 0;
+    let found = 0;
+    let missing = 0;
+
+    const results = [];
 
     for (const item of items) {
       processed++;
 
-      const valuation = await getValuation(item);
+      const cachedValuation = await getValuation(item, { allowStale: true });
+      const persistedValuation = getStoredValuationFromItem(item);
+
+      const valuation = cachedValuation ?? persistedValuation;
 
       if (!valuation) {
-        skipped++;
+        missing++;
+        results.push({
+          itemId: item.id,
+          name: item.name,
+          valuation: null
+        });
         continue;
       }
 
-      await prisma.item.update({
-        where: { id: item.id },
-        data: {
-          marketValue: valuation.price,
-          valuationSource: valuation.source,
-          valuationConfidence: valuation.confidence,
-          lastValuationAt: new Date()
-        }
-      });
-
-      await prisma.itemValuationSnapshot.create({
-        data: {
-          itemId: item.id,
+      found++;
+      results.push({
+        itemId: item.id,
+        name: item.name,
+        valuation: {
+          price: valuation.price,
           source: valuation.source,
-          marketValue: valuation.price,
           confidence: valuation.confidence
-        }
+        },
+        lastValuationAt:
+          "lastValuationAt" in valuation
+            ? valuation.lastValuationAt
+            : item.lastValuationAt
       });
-
-      updated++;
     }
 
     return res.json({
       processed,
-      updated,
-      skipped
+      found,
+      missing,
+      results
     });
   } catch (err) {
     console.error("valuateAllItems error:", err);
-    return res.status(500).json({ message: "Error valuating collection" });
+    return res.status(500).json({ message: "Error reading collection valuation" });
   }
 };

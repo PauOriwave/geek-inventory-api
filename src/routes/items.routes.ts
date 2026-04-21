@@ -20,12 +20,21 @@ router.get("/:id/snapshots", requireAuth, getItemSnapshots);
 router.post("/", requireAuth, createItem);
 
 /**
- * 🔓 FREE
- * Queremos que la valoración sea visible para todos
- * para alimentar gráficos, evolución y percepción de valor.
+ * ⚠️ IMPORTANTE (DEPRECATED SEMÁNTICAMENTE)
+ * Estas rutas YA NO disparan scraping.
+ * Ahora son lectura de valoración persistida/cacheada.
+ *
+ * Mantener por compatibilidad con frontend actual.
  */
 router.post("/valuate-all", requireAuth, valuateAllItems);
 router.post("/:id/valuate", requireAuth, valuateItem);
+
+/**
+ * 🆕 Opcional (más semántico para futuro frontend)
+ * Lectura pura de valoración
+ */
+router.get("/valuation/all", requireAuth, valuateAllItems);
+router.get("/:id/valuation", requireAuth, valuateItem);
 
 router.patch("/:id", requireAuth, updateItem);
 router.delete("/:id", requireAuth, deleteItem);
