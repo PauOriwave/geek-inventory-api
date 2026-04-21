@@ -10,6 +10,8 @@ import achievementsRoutes from "./routes/achievements.routes";
 import statsRoutes from "./routes/stats.routes";
 import usersRoutes from "./routes/users.routes";
 import importRoutes from "./routes/import.routes";
+import internalRoutes from "./routes/internal.routes";
+
 
 const app = express();
 
@@ -36,6 +38,7 @@ app.use("/wishlist", wishlistRoutes);
 app.use("/achievements", achievementsRoutes);
 app.use("/stats", statsRoutes);
 app.use("/users", usersRoutes);
+app.use("/internal", internalRoutes);
 
 // 🔥 aseguramos que el import está montado
 app.use("/import", importRoutes);
