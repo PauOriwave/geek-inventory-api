@@ -18,6 +18,12 @@ enum Category {
   other
 }
 
+enum ScraperRunStatus {
+  SUCCESS
+  NO_DATA
+  ERROR
+}
+
 model User {
   id               String   @id @default(uuid())
   email            String   @unique
@@ -56,6 +62,7 @@ model Item {
   user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   snapshots           ItemValuationSnapshot[]
+  scraperRuns         ScraperRunLog[]
 }
 
 model ItemValuationSnapshot {
@@ -97,4 +104,26 @@ model PriceCache {
   updatedAt  DateTime @updatedAt
 
   @@index([key])
+}
+
+model ScraperRunLog {
+  id           String           @id @default(uuid())
+  itemId        String
+  item          Item             @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  source        String
+  query         String?
+  status        ScraperRunStatus
+
+  matchedTitle  String?
+  matchedUrl    String?
+  matchedPrice  Decimal?
+  confidence    Float?
+  errorMessage  String?
+
+  createdAt     DateTime         @default(now())
+
+  @@index([itemId, createdAt])
+  @@index([source, createdAt])
+  @@index([status, createdAt])
 }

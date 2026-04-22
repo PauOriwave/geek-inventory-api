@@ -2,6 +2,10 @@ import { Item } from "@prisma/client";
 import prisma from "../prisma/client";
 import { getCexPrice } from "./sources/cex.source";
 import { getGamePrice } from "./sources/game.source";
+import {
+  ScraperAttemptLog,
+  ScraperSourceResult
+} from "./scraper.types";
 
 type ValuationResult = {
   price: number;
@@ -9,13 +13,28 @@ type ValuationResult = {
   confidence: number;
 };
 
-const sources = [getCexPrice, getGamePrice];
+type SourceDefinition = {
+  name: string;
+  handler: (item: Item) => Promise<ScraperSourceResult | null>;
+};
+
+const sources: SourceDefinition[] = [
+  { name: "cex", handler: getCexPrice },
+  { name: "game", handler: getGamePrice }
+];
 
 // ⏱️ 24h cache
 const CACHE_TTL_HOURS = 24;
 
 function buildCacheKey(item: Item) {
   return `${item.name}_${item.platform ?? ""}_${item.region ?? ""}`.toLowerCase();
+}
+
+function buildSourceQuery(item: Item) {
+  return [item.name, item.platform ?? "", item.region ?? ""]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" ");
 }
 
 function getCacheAgeHours(date: Date) {
@@ -27,26 +46,103 @@ function isCacheValid(date: Date) {
   return getCacheAgeHours(date) < CACHE_TTL_HOURS;
 }
 
-async function scrapeValuation(item: Item): Promise<ValuationResult | null> {
-  const results = await Promise.allSettled(
-    sources.map((source) => source(item))
+async function logScraperAttempts(
+  item: Item,
+  attempts: ScraperAttemptLog[]
+) {
+  if (attempts.length === 0) return;
+
+  await prisma.scraperRunLog.createMany({
+    data: attempts.map((attempt) => ({
+      itemId: item.id,
+      source: attempt.source,
+      query: attempt.query ?? null,
+      status: attempt.status,
+      matchedTitle: attempt.matchedTitle ?? null,
+      matchedUrl: attempt.matchedUrl ?? null,
+      matchedPrice: attempt.matchedPrice ?? null,
+      confidence: attempt.confidence ?? null,
+      errorMessage: attempt.errorMessage ?? null
+    }))
+  });
+}
+
+async function scrapeValuation(item: Item): Promise<{
+  valuation: ValuationResult | null;
+  attempts: ScraperAttemptLog[];
+}> {
+  const defaultQuery = buildSourceQuery(item);
+
+  const settled = await Promise.allSettled(
+    sources.map(async (source) => {
+      const result = await source.handler(item);
+      return {
+        source: source.name,
+        result
+      };
+    })
   );
 
-  const valid = results
-    .filter(
-      (result): result is PromiseFulfilledResult<ValuationResult | null> =>
-        result.status === "fulfilled"
-    )
-    .map((result) => result.value)
-    .filter(
-      (value): value is ValuationResult =>
-        Boolean(value && value.price > 0 && value.confidence > 0)
-    );
+  const attempts: ScraperAttemptLog[] = [];
+  const valid: ScraperSourceResult[] = [];
 
-  if (valid.length === 0) return null;
+  for (let i = 0; i < settled.length; i++) {
+    const entry = settled[i];
+    const sourceName = sources[i]?.name ?? "unknown";
+
+    if (entry.status === "fulfilled") {
+      const result = entry.value.result;
+
+      if (!result || result.price <= 0 || result.confidence <= 0) {
+        attempts.push({
+          source: sourceName,
+          query: result?.query ?? defaultQuery,
+          status: "NO_DATA"
+        });
+        continue;
+      }
+
+      valid.push(result);
+
+      attempts.push({
+        source: sourceName,
+        query: result.query ?? defaultQuery,
+        status: "SUCCESS",
+        matchedTitle: result.matchedTitle,
+        matchedUrl: result.matchedUrl,
+        matchedPrice: result.price,
+        confidence: result.confidence
+      });
+
+      continue;
+    }
+
+    attempts.push({
+      source: sourceName,
+      query: defaultQuery,
+      status: "ERROR",
+      errorMessage:
+        entry.reason instanceof Error
+          ? entry.reason.message
+          : String(entry.reason)
+    });
+  }
+
+  if (valid.length === 0) {
+    return {
+      valuation: null,
+      attempts
+    };
+  }
 
   const totalWeight = valid.reduce((acc, v) => acc + v.confidence, 0);
-  if (totalWeight === 0) return null;
+
+  if (totalWeight === 0) {
+    return {
+      valuation: null,
+      attempts
+    };
+  }
 
   const weightedPrice =
     valid.reduce((acc, v) => acc + v.price * v.confidence, 0) / totalWeight;
@@ -57,21 +153,17 @@ async function scrapeValuation(item: Item): Promise<ValuationResult | null> {
     valid.reduce((acc, v) => acc + v.confidence, 0) / valid.length;
 
   return {
-    price: Number(weightedPrice.toFixed(2)),
-    source: mergedSources,
-    confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
+    valuation: {
+      price: Number(weightedPrice.toFixed(2)),
+      source: mergedSources,
+      confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
+    },
+    attempts
   };
 }
 
 /**
- * Lectura pura.
- * Nunca scrapea.
- *
- * allowStale = true:
- * - devuelve cache aunque esté vieja
- *
- * allowStale = false:
- * - solo devuelve cache válida según TTL
+ * 🔵 Lectura pura (NO scrapea)
  */
 export async function getValuation(
   item: Item,
@@ -98,23 +190,16 @@ export async function getValuation(
 }
 
 /**
- * Refresco/escritura.
- * Este es el único punto que scrapea fuentes externas.
- *
- * Actualiza:
- * - PriceCache
- * - Item.marketValue
- * - Item.valuationSource
- * - Item.valuationConfidence
- * - Item.lastValuationAt
- * - ItemValuationSnapshot
+ * 🟡 Escritura (único punto que scrapea)
  */
 export async function refreshValuation(
   item: Item
 ): Promise<ValuationResult | null> {
   const key = buildCacheKey(item);
 
-  const valuation = await scrapeValuation(item);
+  const { valuation, attempts } = await scrapeValuation(item);
+
+  await logScraperAttempts(item, attempts);
 
   if (!valuation) {
     return null;
@@ -156,7 +241,7 @@ export async function refreshValuation(
         marketValue: valuation.price,
         source: valuation.source,
         confidence: valuation.confidence,
-        createdAt: now
+        recordedAt: now
       }
     })
   ]);
@@ -165,8 +250,7 @@ export async function refreshValuation(
 }
 
 /**
- * Utilidad opcional para jobs:
- * indica si un item necesita refresh según su cache actual.
+ * 🧠 Utilidad para jobs
  */
 export async function needsValuationRefresh(item: Item): Promise<boolean> {
   const key = buildCacheKey(item);

@@ -9,6 +9,7 @@ import {
   pickBestBySimilarity,
   computeConfidenceFromScore
 } from "../scraper.utils";
+import { ScraperSourceResult } from "../scraper.types";
 
 type CexCandidate = {
   title: string;
@@ -18,7 +19,9 @@ type CexCandidate = {
 
 const CEX_BASE_URL = "https://es.webuy.com";
 
-export async function getCexPrice(item: Item) {
+export async function getCexPrice(
+  item: Item
+): Promise<ScraperSourceResult | null> {
   const query = buildSearchText(item);
   if (!query) return null;
 
@@ -29,8 +32,8 @@ export async function getCexPrice(item: Item) {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "text/html",
-        "Accept-Language": "es-ES"
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
       }
     });
 
@@ -47,20 +50,22 @@ export async function getCexPrice(item: Item) {
       return null;
     }
 
-    const best = pickBestBySimilarity(item, candidates);
+    const best = pickBestCandidate(item, candidates);
 
     if (!best) {
       console.log("CEX no match:", query);
       return null;
     }
 
-    const score = similarity(item, best.title);
-    const confidence = computeConfidenceFromScore(score);
+    const confidence = computeConfidence(item, best.title);
 
     return {
       price: best.price,
       source: "cex",
-      confidence
+      confidence,
+      matchedTitle: best.title,
+      matchedUrl: best.href,
+      query
     };
   } catch (err) {
     console.error("CEX error:", err);
@@ -73,48 +78,119 @@ function extractCandidates(html: string): CexCandidate[] {
   const results: CexCandidate[] = [];
   const unique = new Set<string>();
 
-  $("a").each((_, el) => {
-    const root = $(el);
+  const cardSelectors = [
+    "[class*='product']",
+    "[class*='search'] [class*='item']",
+    "article",
+    ".product-box",
+    ".search-result"
+  ];
 
-    const title =
-      root.attr("title")?.trim() ||
-      root.text()?.trim();
+  const priceSelectors = [
+    "[class*='price']",
+    ".price",
+    ".salesPrice",
+    ".buyPrice"
+  ];
 
-    if (!title || title.length < 5) return;
+  const titleSelectors = [
+    "[class*='title']",
+    "h2",
+    "h3",
+    "a[title]",
+    "a"
+  ];
 
-    const priceText = root
-      .parent()
-      .find("[class*='price']")
-      .first()
-      .text();
+  for (const cardSelector of cardSelectors) {
+    $(cardSelector).each((_, el) => {
+      const root = $(el);
 
-    const price = parseEuroPrice(priceText);
-    if (!price || price <= 0) return;
+      const title = firstNonEmptyText(root, titleSelectors);
+      const priceText = firstNonEmptyText(root, priceSelectors);
+      const href = root.find("a[href]").first().attr("href") || undefined;
 
-    const key = `${normalizeText(title)}|${price}`;
-    if (unique.has(key)) return;
-    unique.add(key);
+      const price = parseEuroPrice(priceText);
 
-    results.push({
-      title,
-      price,
-      href: absolutize(root.attr("href") || "")
+      if (!title || price == null || price <= 0) return;
+
+      const key = `${normalizeText(title)}|${price}`;
+      if (unique.has(key)) return;
+
+      unique.add(key);
+
+      results.push({
+        title: title.trim(),
+        price,
+        href: href ? absolutize(href) : undefined
+      });
     });
-  });
+  }
 
   return results;
 }
 
-function absolutize(href: string) {
-  if (!href) return undefined;
+function firstNonEmptyText(
+  root: cheerio.Cheerio<any>,
+  selectors: string[]
+): string | null {
+  for (const selector of selectors) {
+    const node = root.find(selector).first();
 
-  if (href.startsWith("http")) return href;
-  if (href.startsWith("/")) return `${CEX_BASE_URL}${href}`;
+    if (!node || node.length === 0) continue;
+
+    const text = node.attr("title")?.trim() || node.text()?.trim();
+
+    if (text) return text;
+  }
+
+  return null;
+}
+
+function absolutize(href: string): string {
+  if (href.startsWith("http://") || href.startsWith("https://")) {
+    return href;
+  }
+
+  if (href.startsWith("/")) {
+    return `${CEX_BASE_URL}${href}`;
+  }
 
   return `${CEX_BASE_URL}/${href}`;
 }
 
-function similarity(item: Item, title: string) {
-  const wanted = buildSearchText(item);
-  return normalizeText(wanted) === normalizeText(title) ? 1 : 0.5;
+function pickBestCandidate(
+  item: Item,
+  candidates: CexCandidate[]
+): CexCandidate | null {
+  return pickBestBySimilarity(item, candidates, 0.25);
+}
+
+function computeConfidence(item: Item, matchedTitle: string): number {
+  const wanted = [item.name, item.platform ?? "", item.region ?? ""]
+    .filter(Boolean)
+    .join(" ");
+
+  const baseScore = similarityScoreSafe(wanted, matchedTitle);
+  return computeConfidenceFromScore(baseScore);
+}
+
+function similarityScoreSafe(a: string, b: string) {
+  const aNorm = normalizeText(a);
+  const bNorm = normalizeText(b);
+
+  if (!aNorm || !bNorm) return 0;
+  if (aNorm === bNorm) return 1;
+  if (bNorm.includes(aNorm) || aNorm.includes(bNorm)) return 0.8;
+
+  const aWords = new Set(aNorm.split(" ").filter(Boolean));
+  const bWords = new Set(bNorm.split(" ").filter(Boolean));
+
+  if (aWords.size === 0 || bWords.size === 0) return 0;
+
+  let overlap = 0;
+  for (const word of aWords) {
+    if (bWords.has(word)) overlap++;
+  }
+
+  return overlap / Math.max(aWords.size, bWords.size);
 }
