@@ -2,6 +2,19 @@ import { Request, Response } from "express";
 import prisma from "../prisma/client";
 import { refreshValuation } from "../valuation/valuation.service";
 
+function toPositiveInt(value: unknown, fallback: number) {
+  const parsed =
+    typeof value === "string" ? Number(value) :
+    typeof value === "number" ? value :
+    NaN;
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.floor(parsed);
+}
+
 /**
  * POST /internal/valuations/:id/refresh
  * Refresca valoración de un item concreto
@@ -77,5 +90,125 @@ export const refreshAllValuations = async (req: Request, res: Response) => {
   } catch (err) {
     console.error("refreshAllValuations error:", err);
     return res.status(500).json({ message: "Error refreshing valuations" });
+  }
+};
+
+/**
+ * GET /internal/valuations/:id/logs
+ * Devuelve logs de scraper para un item concreto
+ */
+export const getItemScraperLogs = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const take = Math.min(toPositiveInt(req.query.take, 50), 200);
+
+    const item = await prisma.item.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        platform: true,
+        region: true,
+        lastValuationAt: true,
+        marketValue: true,
+        valuationSource: true,
+        valuationConfidence: true
+      }
+    });
+
+    if (!item) {
+      return res.status(404).json({ message: "Item not found" });
+    }
+
+    const logs = await prisma.scraperRunLog.findMany({
+      where: { itemId: id },
+      orderBy: { createdAt: "desc" },
+      take
+    });
+
+    return res.json({
+      item: {
+        id: item.id,
+        name: item.name,
+        platform: item.platform,
+        region: item.region,
+        lastValuationAt: item.lastValuationAt,
+        marketValue: item.marketValue,
+        valuationSource: item.valuationSource,
+        valuationConfidence: item.valuationConfidence
+      },
+      count: logs.length,
+      logs
+    });
+  } catch (err) {
+    console.error("getItemScraperLogs error:", err);
+    return res.status(500).json({ message: "Error fetching scraper logs" });
+  }
+};
+
+/**
+ * GET /internal/valuations/logs
+ * Filtros opcionales:
+ * - source=cex|game
+ * - status=SUCCESS|NO_DATA|ERROR
+ * - itemId=...
+ * - userId=...
+ * - take=50
+ */
+export const getScraperLogs = async (req: Request, res: Response) => {
+  try {
+    const source =
+      typeof req.query.source === "string" ? req.query.source : undefined;
+
+    const status =
+      typeof req.query.status === "string" ? req.query.status : undefined;
+
+    const itemId =
+      typeof req.query.itemId === "string" ? req.query.itemId : undefined;
+
+    const userId =
+      typeof req.query.userId === "string" ? req.query.userId : undefined;
+
+    const take = Math.min(toPositiveInt(req.query.take, 100), 500);
+
+    const logs = await prisma.scraperRunLog.findMany({
+      where: {
+        ...(source ? { source } : {}),
+        ...(status
+          ? {
+              status: status as "SUCCESS" | "NO_DATA" | "ERROR"
+            }
+          : {}),
+        ...(itemId ? { itemId } : {}),
+        ...(userId
+          ? {
+              item: {
+                userId
+              }
+            }
+          : {})
+      },
+      orderBy: { createdAt: "desc" },
+      take,
+      include: {
+        item: {
+          select: {
+            id: true,
+            name: true,
+            platform: true,
+            region: true,
+            userId: true
+          }
+        }
+      }
+    });
+
+    return res.json({
+      count: logs.length,
+      logs
+    });
+  } catch (err) {
+    console.error("getScraperLogs error:", err);
+    return res.status(500).json({ message: "Error fetching scraper logs" });
   }
 };
