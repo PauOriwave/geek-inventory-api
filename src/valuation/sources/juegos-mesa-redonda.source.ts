@@ -15,10 +15,16 @@ type JuegosMesaRedondaCandidate = {
 const BASE_URL = "https://juegosdelamesaredonda.com";
 
 export async function getJuegosMesaRedondaPrice(item: Item) {
+  if (item.category !== "boardgame") {
+    return null;
+  }
+
   const query = buildSearchQuery(item);
   if (!query) return null;
 
-  const searchUrl = `${BASE_URL}/buscar?controller=search&s=${encodeURIComponent(query)}`;
+  const searchUrl = `${BASE_URL}/buscar?controller=search&s=${encodeURIComponent(
+    query
+  )}`;
 
   console.log("🔍 JMR Searching:", searchUrl);
 
@@ -57,12 +63,18 @@ export async function getJuegosMesaRedondaPrice(item: Item) {
     url: best.url
   });
 
-  const finalPrice = detailPrice ?? best.price;
+  const finalPrice = chooseFinalPrice({
+    listingPrice: best.price,
+    detailPrice
+  });
 
   return {
     price: Number(finalPrice.toFixed(2)),
     source: "juegos_mesa_redonda",
-    confidence: computeConfidence(item, best.title)
+    confidence: computeConfidence(item, best.title),
+    matchedTitle: best.title,
+    matchedUrl: best.url,
+    query
   };
 }
 
@@ -81,8 +93,11 @@ function extractCandidates(html: string): JuegosMesaRedondaCandidate[] {
     const root = $(el);
 
     const title = root.find(".product-title a").text().trim();
-    const priceText = root.find(".price").first().text().trim();
-    const href = root.find("a").attr("href");
+    const priceText =
+      root.find(".current-price .price").first().text().trim() ||
+      root.find(".price").first().text().trim();
+
+    const href = root.find(".product-title a").attr("href") || root.find("a").attr("href");
 
     const price = parseEuroPrice(priceText);
 
@@ -91,38 +106,29 @@ function extractCandidates(html: string): JuegosMesaRedondaCandidate[] {
     results.push({
       title,
       price,
-      url: href.startsWith("http") ? href : `${BASE_URL}/${href}`
+      url: absolutize(href)
     });
   });
 
   return results;
 }
 
-/**
- * 🔥 MATCHING ARREGLADO
- */
 function pickBestCandidate(
   item: Item,
   candidates: JuegosMesaRedondaCandidate[]
 ): JuegosMesaRedondaCandidate | null {
   const wanted = normalizeSearchTitle(item.name);
 
-  // 1. Match exacto o contenido directo
   const exactOrContained = candidates.find((candidate) => {
     const title = normalizeSearchTitle(candidate.title);
 
-    return (
-      title === wanted ||
-      title.includes(wanted) ||
-      wanted.includes(title)
-    );
+    return title === wanted || title.includes(wanted) || wanted.includes(title);
   });
 
   if (exactOrContained) {
     return exactOrContained;
   }
 
-  // 2. Match por tokens obligatorios
   const closeCandidates = candidates.filter((candidate) => {
     const title = normalizeSearchTitle(candidate.title);
     const wantedTokens = wanted.split(" ").filter(Boolean);
@@ -155,11 +161,11 @@ function pickBestBySimilarity(
   candidates: JuegosMesaRedondaCandidate[],
   threshold: number
 ): JuegosMesaRedondaCandidate | null {
-  const wanted = normalizeText(item.name);
+  const wanted = normalizeSearchTitle(item.name);
 
-  const scored = candidates.map((c) => ({
-    candidate: c,
-    score: similarityScore(wanted, normalizeText(c.title))
+  const scored = candidates.map((candidate) => ({
+    candidate,
+    score: similarityScore(wanted, normalizeSearchTitle(candidate.title))
   }));
 
   scored.sort((a, b) => b.score - a.score);
@@ -190,7 +196,9 @@ async function fetchDetailPrice(url: string): Promise<number | null> {
 
     const priceText =
       $(".current-price .price").first().text().trim() ||
-      $(".price").first().text().trim();
+      $(".product-prices .current-price").first().text().trim() ||
+      $(".product-price").first().text().trim() ||
+      $("[itemprop='price']").first().text().trim();
 
     const price = parseEuroPrice(priceText);
 
@@ -201,11 +209,55 @@ async function fetchDetailPrice(url: string): Promise<number | null> {
   }
 }
 
+function chooseFinalPrice(input: {
+  listingPrice: number;
+  detailPrice: number | null;
+}): number {
+  const { listingPrice, detailPrice } = input;
+
+  if (!detailPrice || detailPrice <= 0) {
+    return listingPrice;
+  }
+
+  const maxAllowedDifference = listingPrice * 0.2;
+  const difference = Math.abs(detailPrice - listingPrice);
+
+  if (difference <= maxAllowedDifference) {
+    return detailPrice;
+  }
+
+  console.log("⚠️ JMR detail price rejected, using listing price:", {
+    listingPrice,
+    detailPrice,
+    difference
+  });
+
+  return listingPrice;
+}
+
+function absolutize(href: string): string {
+  if (href.startsWith("http://") || href.startsWith("https://")) {
+    return href;
+  }
+
+  if (href.startsWith("/")) {
+    return `${BASE_URL}${href}`;
+  }
+
+  return `${BASE_URL}/${href}`;
+}
+
 function computeConfidence(item: Item, matchedTitle: string): number {
-  const wanted = normalizeText(item.name);
-  const base = similarityScore(wanted, normalizeText(matchedTitle));
+  const wanted = normalizeSearchTitle(item.name);
+  const matched = normalizeSearchTitle(matchedTitle);
+
+  const base = similarityScore(wanted, matched);
 
   let confidence = 0.5 + base * 0.4;
+
+  if (matched.includes(wanted)) {
+    confidence += 0.05;
+  }
 
   return Math.max(0.2, Math.min(0.95, Number(confidence.toFixed(2))));
 }
