@@ -133,13 +133,21 @@ async function enrichCandidateFromDetailPage(
 
   const detail = extractProductDetail(html);
 
-  if (!detail) {
+  if (!detail || detail.price == null) {
+    console.log("JMR detail price not found, using listing price:", candidate.price);
     return candidate;
   }
 
+  console.log("JMR detail price:", {
+    title: detail.title || candidate.title,
+    listingPrice: candidate.price,
+    detailPrice: detail.price,
+    url: candidate.href
+  });
+
   return {
     title: detail.title || candidate.title,
-    price: detail.price ?? candidate.price,
+    price: detail.price,
     href: candidate.href
   };
 }
@@ -155,27 +163,113 @@ function extractProductDetail(
     $("meta[property='og:title']").attr("content")?.trim() ||
     null;
 
-  const preferredPriceTexts = [
-    $(".current-price [content]").first().attr("content"),
-    $(".current-price").first().text(),
-    $(".product-price").first().text(),
-    $("[itemprop='price']").first().attr("content"),
-    $("[itemprop='price']").first().text(),
-    $("meta[property='product:price:amount']").attr("content")
+  const visiblePrice = extractVisibleCurrentPrice($);
+
+  if (visiblePrice != null) {
+    return {
+      title: cleanTitle(title),
+      price: visiblePrice
+    };
+  }
+
+  const metaPrice = extractSafeMetaPrice($);
+
+  if (metaPrice != null) {
+    return {
+      title: cleanTitle(title),
+      price: metaPrice
+    };
+  }
+
+  return null;
+}
+
+function extractVisibleCurrentPrice($: cheerio.CheerioAPI): number | null {
+  const selectors = [
+    ".current-price .price",
+    ".product-prices .current-price .price",
+    ".product-prices .current-price",
+    ".product-price .current-price",
+    ".product-price",
+    "[itemprop='price']"
   ];
 
-  for (const priceText of preferredPriceTexts) {
-    const price = parseEuroPrice(priceText ?? null);
+  for (const selector of selectors) {
+    const nodes = $(selector).toArray();
+
+    for (const node of nodes) {
+      const el = $(node);
+
+      const text = normalizeWhitespace(el.text());
+
+      if (!text || !text.includes("€")) {
+        continue;
+      }
+
+      const price = parseLastEuroPrice(text);
+
+      if (price != null && price > 0) {
+        return price;
+      }
+    }
+  }
+
+  const bodyText = normalizeWhitespace($("body").text());
+  const titleText = normalizeWhitespace($("h1").first().text());
+
+  if (titleText && bodyText.includes(titleText)) {
+    const idx = bodyText.indexOf(titleText);
+    const nearby = bodyText.slice(idx, idx + 800);
+    const price = parseLastEuroPrice(nearby);
 
     if (price != null && price > 0) {
-      return {
-        title: cleanTitle(title),
-        price
-      };
+      return price;
     }
   }
 
   return null;
+}
+
+function extractSafeMetaPrice($: cheerio.CheerioAPI): number | null {
+  const metaSelectors = [
+    "meta[property='product:price:amount']",
+    "meta[itemprop='price']",
+    "[itemprop='price'][content]"
+  ];
+
+  for (const selector of metaSelectors) {
+    const content = $(selector).first().attr("content");
+
+    if (!content) {
+      continue;
+    }
+
+    const price = parseEuroPrice(content);
+
+    if (price != null && price > 0) {
+      return price;
+    }
+  }
+
+  return null;
+}
+
+function parseLastEuroPrice(text: string | null): number | null {
+  if (!text) return null;
+
+  const matches = [...text.matchAll(/(\d{1,4}(?:[.,]\d{2})?)\s*€/g)];
+
+  if (matches.length === 0) {
+    return parseEuroPrice(text);
+  }
+
+  const lastMatch = matches[matches.length - 1]?.[1];
+
+  if (!lastMatch) {
+    return null;
+  }
+
+  return parseEuroPrice(lastMatch);
 }
 
 function extractCandidates(html: string): JuegosMesaRedondaCandidate[] {
@@ -215,6 +309,7 @@ function extractProductCards(
   ];
 
   const priceSelectors = [
+    ".current-price .price",
     ".current-price",
     ".price",
     ".product-price",
@@ -324,7 +419,7 @@ function addCandidate(input: {
   seen: Set<string>;
 }) {
   const title = cleanTitle(input.title);
-  const price = parseEuroPrice(input.priceText);
+  const price = parseLastEuroPrice(input.priceText);
 
   if (!title || price == null || price <= 0) return;
 
@@ -382,6 +477,10 @@ function firstNonEmptyText(
   }
 
   return null;
+}
+
+function normalizeWhitespace(value: string | null | undefined): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function cleanTitle(value: string | null): string | null {
