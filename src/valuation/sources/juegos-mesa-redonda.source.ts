@@ -56,7 +56,7 @@ export async function getJuegosMesaRedondaPrice(
       return null;
     }
 
-    const best = pickBestBySimilarity(item, candidates, 0.22);
+    const best = pickBestCandidate(item, candidates);
 
     if (!best) {
       console.log("JMR no match:", query);
@@ -163,6 +163,7 @@ function extractProductCards(
       const root = $(el);
 
       const title = firstNonEmptyText(root, titleSelectors);
+
       const priceText =
         firstNonEmptyText(root, priceSelectors) ||
         root.text();
@@ -276,6 +277,28 @@ function addCandidate(input: {
   });
 }
 
+function pickBestCandidate(
+  item: Item,
+  candidates: JuegosMesaRedondaCandidate[]
+): JuegosMesaRedondaCandidate | null {
+  const wanted = normalizeText(item.name);
+  const strictMatch = candidates.find((candidate) => {
+    const title = normalizeText(candidate.title);
+
+    return (
+      title === wanted ||
+      title.includes(wanted) ||
+      wanted.includes(title)
+    );
+  });
+
+  if (strictMatch) {
+    return strictMatch;
+  }
+
+  return pickBestBySimilarity(item, candidates, 0.15);
+}
+
 function firstNonEmptyText(
   root: cheerio.Cheerio<any>,
   selectors: string[]
@@ -304,6 +327,8 @@ function cleanTitle(value: string | null): string | null {
     .replace(/Añadir a la cesta/gi, "")
     .replace(/En stock/gi, "")
     .replace(/Fuera de stock/gi, "")
+    .replace(/Segunda mano/gi, "")
+    .replace(/\(\s*\)/g, "")
     .trim();
 
   if (cleaned.length < 3) return null;
@@ -332,11 +357,11 @@ function computeConfidence(item: Item, matchedTitle: string): number {
 
   const normalizedTitle = normalizeText(matchedTitle);
 
-  if (normalizedTitle.includes("segunda mano")) {
-    score += 0.08;
+  if (normalizedTitle.includes(normalizeText(item.name))) {
+    score += 0.2;
   }
 
-  if (normalizedTitle.includes("castellano") || normalizedTitle.includes("español")) {
+  if (normalizedTitle.includes("castellano") || normalizedTitle.includes("espanol")) {
     score += 0.04;
   }
 
