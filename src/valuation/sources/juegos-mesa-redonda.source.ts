@@ -1,449 +1,115 @@
 import { Item } from "@prisma/client";
 import * as cheerio from "cheerio";
-import { normalizeText, parseEuroPrice, similarityScore } from "../utils";
 import {
-  buildSearchText,
-  pickBestBySimilarity,
-  computeConfidenceFromScore
-} from "../scraper.utils";
-import { ScraperSourceResult } from "../scraper.types";
+  normalizeText,
+  parseEuroPrice,
+  similarityScore
+} from "../utils";
 
 type JuegosMesaRedondaCandidate = {
   title: string;
   price: number;
-  href?: string;
+  url: string;
 };
 
-const JMR_BASE_URL = "https://juegosdelamesaredonda.com";
-const REQUEST_TIMEOUT_MS = 15000;
+const BASE_URL = "https://juegosdelamesaredonda.com";
 
-export async function getJuegosMesaRedondaPrice(
-  item: Item
-): Promise<ScraperSourceResult | null> {
-  if (item.category !== "boardgame") {
-    return null;
-  }
-
-  const query = buildSearchText(item);
+export async function getJuegosMesaRedondaPrice(item: Item) {
+  const query = buildSearchQuery(item);
   if (!query) return null;
 
-  const searchUrl = `${JMR_BASE_URL}/search?controller=search&s=${encodeURIComponent(
-    query
-  )}`;
+  const searchUrl = `${BASE_URL}/buscar?controller=search&s=${encodeURIComponent(query)}`;
 
-  try {
-    const html = await fetchHtml(searchUrl);
+  console.log("🔍 JMR Searching:", searchUrl);
 
-    if (!html) {
-      return null;
+  const res = await fetch(searchUrl, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127.0 Safari/537.36"
     }
-
-    let candidates = extractCandidates(html);
-
-    if (candidates.length === 0) {
-      const secondHandUrl = `${JMR_BASE_URL}/158-segunda-mano`;
-      const secondHandHtml = await fetchHtml(secondHandUrl);
-
-      if (secondHandHtml) {
-        candidates = extractCandidates(secondHandHtml);
-      }
-    }
-
-    console.log("JMR candidates:", candidates.length, query);
-
-    if (candidates.length === 0) {
-      console.log("JMR no candidates:", query);
-      return null;
-    }
-
-    const best = pickBestCandidate(item, candidates);
-
-    if (!best) {
-      console.log("JMR no match:", query);
-      return null;
-    }
-
-    const detailCandidate = best.href
-      ? await enrichCandidateFromDetailPage(best)
-      : best;
-
-    const confidence = computeConfidence(item, detailCandidate.title);
-
-    return {
-      price: detailCandidate.price,
-      source: "juegos_mesa_redonda",
-      confidence,
-      matchedTitle: detailCandidate.title,
-      matchedUrl: detailCandidate.href,
-      query
-    };
-  } catch (err) {
-    console.error("JMR error:", err);
-    return null;
-  }
-}
-
-async function fetchHtml(url: string): Promise<string | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-        Referer: JMR_BASE_URL
-      }
-    });
-
-    if (!res.ok) {
-      console.error("JMR fetch failed:", res.status, url);
-      return null;
-    }
-
-    return await res.text();
-  } catch (error) {
-    console.error("JMR fetch error:", error);
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function enrichCandidateFromDetailPage(
-  candidate: JuegosMesaRedondaCandidate
-): Promise<JuegosMesaRedondaCandidate> {
-  if (!candidate.href) {
-    return candidate;
-  }
-
-  const html = await fetchHtml(candidate.href);
-
-  if (!html) {
-    return candidate;
-  }
-
-  const detail = extractProductDetail(html);
-
-  if (!detail || detail.price == null) {
-    console.log("JMR detail price not found, using listing price:", candidate.price);
-    return candidate;
-  }
-
-  console.log("JMR detail price:", {
-    title: detail.title || candidate.title,
-    listingPrice: candidate.price,
-    detailPrice: detail.price,
-    url: candidate.href
   });
 
+  if (!res.ok) {
+    console.log("❌ JMR search failed:", res.status);
+    return null;
+  }
+
+  const html = await res.text();
+  const candidates = extractCandidates(html);
+
+  console.log("📦 JMR candidates:", candidates.length);
+
+  if (candidates.length === 0) return null;
+
+  const best = pickBestCandidate(item, candidates);
+
+  if (!best) {
+    console.log("❌ JMR no match:", item.name);
+    return null;
+  }
+
+  const detailPrice = await fetchDetailPrice(best.url);
+
+  console.log("📄 JMR detail price:", {
+    title: best.title,
+    listingPrice: best.price,
+    detailPrice,
+    url: best.url
+  });
+
+  const finalPrice = detailPrice ?? best.price;
+
   return {
-    title: detail.title || candidate.title,
-    price: detail.price,
-    href: candidate.href
+    price: Number(finalPrice.toFixed(2)),
+    source: "juegos_mesa_redonda",
+    confidence: computeConfidence(item, best.title)
   };
 }
 
-function extractProductDetail(
-  html: string
-): { title: string | null; price: number | null } | null {
-  const $ = cheerio.load(html);
-
-  const title =
-    $("h1").first().text().trim() ||
-    $("[itemprop='name']").first().text().trim() ||
-    $("meta[property='og:title']").attr("content")?.trim() ||
-    null;
-
-  const visiblePrice = extractVisibleCurrentPrice($);
-
-  if (visiblePrice != null) {
-    return {
-      title: cleanTitle(title),
-      price: visiblePrice
-    };
-  }
-
-  const metaPrice = extractSafeMetaPrice($);
-
-  if (metaPrice != null) {
-    return {
-      title: cleanTitle(title),
-      price: metaPrice
-    };
-  }
-
-  return null;
-}
-
-function extractVisibleCurrentPrice($: cheerio.CheerioAPI): number | null {
-  const selectors = [
-    ".current-price .price",
-    ".product-prices .current-price .price",
-    ".product-prices .current-price",
-    ".product-price .current-price",
-    ".product-price",
-    "[itemprop='price']"
-  ];
-
-  for (const selector of selectors) {
-    const nodes = $(selector).toArray();
-
-    for (const node of nodes) {
-      const el = $(node);
-
-      const text = normalizeWhitespace(el.text());
-
-      if (!text || !text.includes("€")) {
-        continue;
-      }
-
-      const price = parseLastEuroPrice(text);
-
-      if (price != null && price > 0) {
-        return price;
-      }
-    }
-  }
-
-  const bodyText = normalizeWhitespace($("body").text());
-  const titleText = normalizeWhitespace($("h1").first().text());
-
-  if (titleText && bodyText.includes(titleText)) {
-    const idx = bodyText.indexOf(titleText);
-    const nearby = bodyText.slice(idx, idx + 800);
-    const price = parseLastEuroPrice(nearby);
-
-    if (price != null && price > 0) {
-      return price;
-    }
-  }
-
-  return null;
-}
-
-function extractSafeMetaPrice($: cheerio.CheerioAPI): number | null {
-  const metaSelectors = [
-    "meta[property='product:price:amount']",
-    "meta[itemprop='price']",
-    "[itemprop='price'][content]"
-  ];
-
-  for (const selector of metaSelectors) {
-    const content = $(selector).first().attr("content");
-
-    if (!content) {
-      continue;
-    }
-
-    const price = parseEuroPrice(content);
-
-    if (price != null && price > 0) {
-      return price;
-    }
-  }
-
-  return null;
-}
-
-function parseLastEuroPrice(text: string | null): number | null {
-  if (!text) return null;
-
-  const matches = [...text.matchAll(/(\d{1,4}(?:[.,]\d{2})?)\s*€/g)];
-
-  if (matches.length === 0) {
-    return parseEuroPrice(text);
-  }
-
-  const lastMatch = matches[matches.length - 1]?.[1];
-
-  if (!lastMatch) {
-    return null;
-  }
-
-  return parseEuroPrice(lastMatch);
+function buildSearchQuery(item: Item): string {
+  return [item.name, item.platform ?? "", item.region ?? ""]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 }
 
 function extractCandidates(html: string): JuegosMesaRedondaCandidate[] {
   const $ = cheerio.load(html);
   const results: JuegosMesaRedondaCandidate[] = [];
-  const seen = new Set<string>();
 
-  extractProductCards($, results, seen);
-  extractJsonLdProducts($, results, seen);
+  $(".product-miniature").each((_, el) => {
+    const root = $(el);
+
+    const title = root.find(".product-title a").text().trim();
+    const priceText = root.find(".price").first().text().trim();
+    const href = root.find("a").attr("href");
+
+    const price = parseEuroPrice(priceText);
+
+    if (!title || !price || !href) return;
+
+    results.push({
+      title,
+      price,
+      url: href.startsWith("http") ? href : `${BASE_URL}/${href}`
+    });
+  });
 
   return results;
 }
 
-function extractProductCards(
-  $: cheerio.CheerioAPI,
-  results: JuegosMesaRedondaCandidate[],
-  seen: Set<string>
-) {
-  const cardSelectors = [
-    ".product-miniature",
-    ".js-product-miniature",
-    "article.product-miniature",
-    "[data-id-product]",
-    ".product",
-    "article",
-    "li"
-  ];
-
-  const titleSelectors = [
-    ".product-title a",
-    ".product-title",
-    "h1",
-    "h2",
-    "h3",
-    "a[title]",
-    "a"
-  ];
-
-  const priceSelectors = [
-    ".current-price .price",
-    ".current-price",
-    ".price",
-    ".product-price",
-    "[itemprop='price']",
-    "[class*='price']"
-  ];
-
-  for (const cardSelector of cardSelectors) {
-    $(cardSelector).each((_, el) => {
-      const root = $(el);
-
-      const title = firstNonEmptyText(root, titleSelectors);
-
-      const priceText =
-        firstNonEmptyText(root, priceSelectors) ||
-        root.text();
-
-      const href =
-        root.find("a[href]").first().attr("href") ||
-        root.attr("href") ||
-        undefined;
-
-      addCandidate({
-        title,
-        priceText,
-        href,
-        results,
-        seen
-      });
-    });
-  }
-}
-
-function extractJsonLdProducts(
-  $: cheerio.CheerioAPI,
-  results: JuegosMesaRedondaCandidate[],
-  seen: Set<string>
-) {
-  $("script[type='application/ld+json']").each((_, el) => {
-    const raw = $(el).text();
-
-    if (!raw) return;
-
-    try {
-      const parsed = JSON.parse(raw);
-      const nodes = Array.isArray(parsed) ? parsed : [parsed];
-
-      for (const node of nodes) {
-        extractJsonLdNode(node, results, seen);
-      }
-    } catch {
-      return;
-    }
-  });
-}
-
-function extractJsonLdNode(
-  node: any,
-  results: JuegosMesaRedondaCandidate[],
-  seen: Set<string>
-) {
-  if (!node || typeof node !== "object") return;
-
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      extractJsonLdNode(child, results, seen);
-    }
-    return;
-  }
-
-  if (node["@graph"]) {
-    extractJsonLdNode(node["@graph"], results, seen);
-  }
-
-  const type = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
-
-  if (type.includes("Product")) {
-    const title = typeof node.name === "string" ? node.name : null;
-    const href = typeof node.url === "string" ? node.url : undefined;
-
-    const offer = Array.isArray(node.offers) ? node.offers[0] : node.offers;
-
-    const rawPrice =
-      offer?.price ??
-      offer?.lowPrice ??
-      offer?.highPrice ??
-      node.price ??
-      null;
-
-    const priceText = rawPrice != null ? String(rawPrice) : null;
-
-    addCandidate({
-      title,
-      priceText,
-      href,
-      results,
-      seen
-    });
-  }
-}
-
-function addCandidate(input: {
-  title: string | null;
-  priceText: string | null;
-  href?: string;
-  results: JuegosMesaRedondaCandidate[];
-  seen: Set<string>;
-}) {
-  const title = cleanTitle(input.title);
-  const price = parseLastEuroPrice(input.priceText);
-
-  if (!title || price == null || price <= 0) return;
-
-  const key = `${normalizeText(title)}|${price}`;
-
-  if (input.seen.has(key)) return;
-
-  input.seen.add(key);
-
-  input.results.push({
-    title,
-    price,
-    href: input.href ? absolutize(input.href) : undefined
-  });
-}
-
+/**
+ * 🔥 MATCHING ARREGLADO
+ */
 function pickBestCandidate(
   item: Item,
   candidates: JuegosMesaRedondaCandidate[]
 ): JuegosMesaRedondaCandidate | null {
-  const wanted = normalizeText(item.name);
+  const wanted = normalizeSearchTitle(item.name);
 
-  const strictMatch = candidates.find((candidate) => {
-    const title = normalizeText(candidate.title);
+  // 1. Match exacto o contenido directo
+  const exactOrContained = candidates.find((candidate) => {
+    const title = normalizeSearchTitle(candidate.title);
 
     return (
       title === wanted ||
@@ -452,85 +118,94 @@ function pickBestCandidate(
     );
   });
 
-  if (strictMatch) {
-    return strictMatch;
+  if (exactOrContained) {
+    return exactOrContained;
   }
 
-  return pickBestBySimilarity(item, candidates, 0.15);
-}
+  // 2. Match por tokens obligatorios
+  const closeCandidates = candidates.filter((candidate) => {
+    const title = normalizeSearchTitle(candidate.title);
+    const wantedTokens = wanted.split(" ").filter(Boolean);
 
-function firstNonEmptyText(
-  root: cheerio.Cheerio<any>,
-  selectors: string[]
-): string | null {
-  for (const selector of selectors) {
-    const node = root.find(selector).first();
+    return wantedTokens.every((token) => title.includes(token));
+  });
 
-    if (!node || node.length === 0) continue;
-
-    const text =
-      node.attr("title")?.trim() ||
-      node.attr("content")?.trim() ||
-      node.text()?.trim();
-
-    if (text) return text;
+  if (closeCandidates.length > 0) {
+    return pickBestBySimilarity(item, closeCandidates, 0.15);
   }
 
   return null;
 }
 
-function normalizeWhitespace(value: string | null | undefined): string {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function cleanTitle(value: string | null): string | null {
-  if (!value) return null;
-
-  const cleaned = value
+function normalizeSearchTitle(value: string | null): string {
+  return normalizeText(value || "")
+    .replace(/\bcastellano\b/g, "")
+    .replace(/\bespanol\b/g, "")
+    .replace(/\bespañol\b/g, "")
+    .replace(/\bsegunda\b/g, "")
+    .replace(/\bmano\b/g, "")
+    .replace(/\bjuego\b/g, "")
+    .replace(/\bmesa\b/g, "")
     .replace(/\s+/g, " ")
-    .replace(/Añadir a la cesta/gi, "")
-    .replace(/En stock/gi, "")
-    .replace(/Fuera de stock/gi, "")
-    .replace(/Segunda mano/gi, "")
-    .replace(/\(\s*\)/g, "")
     .trim();
-
-  if (cleaned.length < 3) return null;
-
-  return cleaned;
 }
 
-function absolutize(href: string): string {
-  if (href.startsWith("http://") || href.startsWith("https://")) {
-    return href;
-  }
+function pickBestBySimilarity(
+  item: Item,
+  candidates: JuegosMesaRedondaCandidate[],
+  threshold: number
+): JuegosMesaRedondaCandidate | null {
+  const wanted = normalizeText(item.name);
 
-  if (href.startsWith("/")) {
-    return `${JMR_BASE_URL}${href}`;
-  }
+  const scored = candidates.map((c) => ({
+    candidate: c,
+    score: similarityScore(wanted, normalizeText(c.title))
+  }));
 
-  return `${JMR_BASE_URL}/${href}`;
+  scored.sort((a, b) => b.score - a.score);
+
+  const best = scored[0];
+
+  if (!best || best.score < threshold) return null;
+
+  return best.candidate;
+}
+
+async function fetchDetailPrice(url: string): Promise<number | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127.0 Safari/537.36"
+      }
+    });
+
+    if (!res.ok) {
+      console.log("❌ JMR detail fetch failed:", res.status);
+      return null;
+    }
+
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    const priceText =
+      $(".current-price .price").first().text().trim() ||
+      $(".price").first().text().trim();
+
+    const price = parseEuroPrice(priceText);
+
+    return price ?? null;
+  } catch (err) {
+    console.log("❌ JMR detail error:", err);
+    return null;
+  }
 }
 
 function computeConfidence(item: Item, matchedTitle: string): number {
-  const wanted = [item.name, item.platform ?? "", item.region ?? ""]
-    .filter(Boolean)
-    .join(" ");
+  const wanted = normalizeText(item.name);
+  const base = similarityScore(wanted, normalizeText(matchedTitle));
 
-  let score = similarityScore(wanted, matchedTitle);
+  let confidence = 0.5 + base * 0.4;
 
-  const normalizedTitle = normalizeText(matchedTitle);
-
-  if (normalizedTitle.includes(normalizeText(item.name))) {
-    score += 0.2;
-  }
-
-  if (
-    normalizedTitle.includes("castellano") ||
-    normalizedTitle.includes("espanol")
-  ) {
-    score += 0.04;
-  }
-
-  return computeConfidenceFromScore(Math.min(score, 1));
+  return Math.max(0.2, Math.min(0.95, Number(confidence.toFixed(2))));
 }
