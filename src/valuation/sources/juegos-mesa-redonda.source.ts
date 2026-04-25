@@ -63,14 +63,18 @@ export async function getJuegosMesaRedondaPrice(
       return null;
     }
 
-    const confidence = computeConfidence(item, best.title);
+    const detailCandidate = best.href
+      ? await enrichCandidateFromDetailPage(best)
+      : best;
+
+    const confidence = computeConfidence(item, detailCandidate.title);
 
     return {
-      price: best.price,
+      price: detailCandidate.price,
       source: "juegos_mesa_redonda",
       confidence,
-      matchedTitle: best.title,
-      matchedUrl: best.href,
+      matchedTitle: detailCandidate.title,
+      matchedUrl: detailCandidate.href,
       query
     };
   } catch (err) {
@@ -114,6 +118,66 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
+async function enrichCandidateFromDetailPage(
+  candidate: JuegosMesaRedondaCandidate
+): Promise<JuegosMesaRedondaCandidate> {
+  if (!candidate.href) {
+    return candidate;
+  }
+
+  const html = await fetchHtml(candidate.href);
+
+  if (!html) {
+    return candidate;
+  }
+
+  const detail = extractProductDetail(html);
+
+  if (!detail) {
+    return candidate;
+  }
+
+  return {
+    title: detail.title || candidate.title,
+    price: detail.price ?? candidate.price,
+    href: candidate.href
+  };
+}
+
+function extractProductDetail(
+  html: string
+): { title: string | null; price: number | null } | null {
+  const $ = cheerio.load(html);
+
+  const title =
+    $("h1").first().text().trim() ||
+    $("[itemprop='name']").first().text().trim() ||
+    $("meta[property='og:title']").attr("content")?.trim() ||
+    null;
+
+  const preferredPriceTexts = [
+    $(".current-price [content]").first().attr("content"),
+    $(".current-price").first().text(),
+    $(".product-price").first().text(),
+    $("[itemprop='price']").first().attr("content"),
+    $("[itemprop='price']").first().text(),
+    $("meta[property='product:price:amount']").attr("content")
+  ];
+
+  for (const priceText of preferredPriceTexts) {
+    const price = parseEuroPrice(priceText ?? null);
+
+    if (price != null && price > 0) {
+      return {
+        title: cleanTitle(title),
+        price
+      };
+    }
+  }
+
+  return null;
+}
+
 function extractCandidates(html: string): JuegosMesaRedondaCandidate[] {
   const $ = cheerio.load(html);
   const results: JuegosMesaRedondaCandidate[] = [];
@@ -151,9 +215,9 @@ function extractProductCards(
   ];
 
   const priceSelectors = [
+    ".current-price",
     ".price",
     ".product-price",
-    ".current-price",
     "[itemprop='price']",
     "[class*='price']"
   ];
@@ -282,6 +346,7 @@ function pickBestCandidate(
   candidates: JuegosMesaRedondaCandidate[]
 ): JuegosMesaRedondaCandidate | null {
   const wanted = normalizeText(item.name);
+
   const strictMatch = candidates.find((candidate) => {
     const title = normalizeText(candidate.title);
 
@@ -361,7 +426,10 @@ function computeConfidence(item: Item, matchedTitle: string): number {
     score += 0.2;
   }
 
-  if (normalizedTitle.includes("castellano") || normalizedTitle.includes("espanol")) {
+  if (
+    normalizedTitle.includes("castellano") ||
+    normalizedTitle.includes("espanol")
+  ) {
     score += 0.04;
   }
 
