@@ -1,9 +1,6 @@
 import { Item } from "@prisma/client";
 import * as cheerio from "cheerio";
-import {
-  normalizeText,
-  parseEuroPrice
-} from "../utils";
+import { normalizeText, parseEuroPrice, similarityScore } from "../utils";
 import {
   buildSearchText,
   pickBestBySimilarity,
@@ -18,6 +15,7 @@ type CexCandidate = {
 };
 
 const CEX_BASE_URL = "https://es.webuy.com";
+const REQUEST_TIMEOUT_MS = 15000;
 
 export async function getCexPrice(
   item: Item
@@ -28,29 +26,22 @@ export async function getCexPrice(
   const searchUrl = `${CEX_BASE_URL}/search?stext=${encodeURIComponent(query)}`;
 
   try {
-    const res = await fetch(searchUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
-      }
-    });
+    const html = await fetchCexHtml(searchUrl);
 
-    if (!res.ok) {
-      console.error("CEX fetch failed:", res.status);
+    if (!html) {
       return null;
     }
 
-    const html = await res.text();
     const candidates = extractCandidates(html);
+
+    console.log("CEX candidates:", candidates.length, query);
 
     if (candidates.length === 0) {
       console.log("CEX no candidates:", query);
       return null;
     }
 
-    const best = pickBestCandidate(item, candidates);
+    const best = pickBestBySimilarity(item, candidates, 0.25);
 
     if (!best) {
       console.log("CEX no match:", query);
@@ -73,6 +64,48 @@ export async function getCexPrice(
   }
 }
 
+async function fetchCexHtml(url: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+        Connection: "keep-alive",
+        Referer: "https://es.webuy.com/",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1"
+      }
+    });
+
+    if (!res.ok) {
+      console.error("CEX fetch failed:", res.status);
+      return null;
+    }
+
+    return await res.text();
+  } catch (error) {
+    console.error("CEX fetch error:", error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function extractCandidates(html: string): CexCandidate[] {
   const $ = cheerio.load(html);
   const results: CexCandidate[] = [];
@@ -83,14 +116,17 @@ function extractCandidates(html: string): CexCandidate[] {
     "[class*='search'] [class*='item']",
     "article",
     ".product-box",
-    ".search-result"
+    ".search-result",
+    "li",
+    ".card"
   ];
 
   const priceSelectors = [
     "[class*='price']",
     ".price",
     ".salesPrice",
-    ".buyPrice"
+    ".buyPrice",
+    "[data-testid*='price']"
   ];
 
   const titleSelectors = [
@@ -158,39 +194,30 @@ function absolutize(href: string): string {
   return `${CEX_BASE_URL}/${href}`;
 }
 
-function pickBestCandidate(
-  item: Item,
-  candidates: CexCandidate[]
-): CexCandidate | null {
-  return pickBestBySimilarity(item, candidates, 0.25);
-}
-
 function computeConfidence(item: Item, matchedTitle: string): number {
   const wanted = [item.name, item.platform ?? "", item.region ?? ""]
     .filter(Boolean)
     .join(" ");
 
-  const baseScore = similarityScoreSafe(wanted, matchedTitle);
-  return computeConfidenceFromScore(baseScore);
-}
+  let score = similarityScore(wanted, matchedTitle);
 
-function similarityScoreSafe(a: string, b: string) {
-  const aNorm = normalizeText(a);
-  const bNorm = normalizeText(b);
+  const normalizedTitle = normalizeText(matchedTitle);
 
-  if (!aNorm || !bNorm) return 0;
-  if (aNorm === bNorm) return 1;
-  if (bNorm.includes(aNorm) || aNorm.includes(bNorm)) return 0.8;
+  if (item.platform) {
+    const platform = normalizeText(item.platform);
 
-  const aWords = new Set(aNorm.split(" ").filter(Boolean));
-  const bWords = new Set(bNorm.split(" ").filter(Boolean));
-
-  if (aWords.size === 0 || bWords.size === 0) return 0;
-
-  let overlap = 0;
-  for (const word of aWords) {
-    if (bWords.has(word)) overlap++;
+    if (normalizedTitle.includes(platform)) {
+      score += 0.1;
+    }
   }
 
-  return overlap / Math.max(aWords.size, bWords.size);
+  if (item.region) {
+    const region = normalizeText(item.region);
+
+    if (normalizedTitle.includes(region)) {
+      score += 0.05;
+    }
+  }
+
+  return computeConfidenceFromScore(Math.min(score, 1));
 }
