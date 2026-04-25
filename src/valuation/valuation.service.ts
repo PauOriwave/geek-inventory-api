@@ -2,6 +2,7 @@ import { Item } from "@prisma/client";
 import prisma from "../prisma/client";
 import { getCexPrice } from "./sources/cex.source";
 import { getGamePrice } from "./sources/game.source";
+import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import {
   ScraperAttemptLog,
   ScraperSourceResult
@@ -20,7 +21,8 @@ type SourceDefinition = {
 
 const sources: SourceDefinition[] = [
   { name: "cex", handler: getCexPrice },
-  { name: "game", handler: getGamePrice }
+  { name: "game", handler: getGamePrice },
+  { name: "juegos_mesa_redonda", handler: getJuegosMesaRedondaPrice }
 ];
 
 // ⏱️ 24h cache
