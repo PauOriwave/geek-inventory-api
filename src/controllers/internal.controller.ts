@@ -18,17 +18,45 @@ function toPositiveInt(value: unknown, fallback: number) {
 /**
  * POST /internal/valuations/:id/refresh
  * Refresca valoración de un item concreto
+ *
+ * DEBUG TEMPORAL:
+ * - imprime el ID solicitado
+ * - imprime algunos items visibles para el backend
  */
 export const refreshItemValuation = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
+
+    console.log("[internal.refreshItemValuation] REQUESTED ITEM ID:", id);
+
+    const debugItems = await prisma.item.findMany({
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        userId: true
+      },
+      take: 10,
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+
+    console.log(
+      "[internal.refreshItemValuation] ITEMS VISIBLE TO BACKEND:",
+      debugItems
+    );
 
     const item = await prisma.item.findUnique({
       where: { id }
     });
 
     if (!item) {
-      return res.status(404).json({ message: "Item not found" });
+      return res.status(404).json({
+        message: "Item not found",
+        requestedId: id,
+        backendVisibleItems: debugItems
+      });
     }
 
     const valuation = await refreshValuation(item);
@@ -149,7 +177,7 @@ export const getItemScraperLogs = async (req: Request, res: Response) => {
 /**
  * GET /internal/valuations/logs
  * Filtros opcionales:
- * - source=cex|game
+ * - source=world_viceous|chollo_games|juegos_mesa_redonda
  * - status=SUCCESS|NO_DATA|ERROR
  * - itemId=...
  * - userId=...
