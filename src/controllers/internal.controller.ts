@@ -2,6 +2,12 @@ import { Request, Response } from "express";
 import prisma from "../prisma/client";
 import { refreshValuation } from "../valuation/valuation.service";
 
+function cleanId(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/[\n\r\t]/g, "");
+}
+
 function toPositiveInt(value: unknown, fallback: number) {
   const parsed =
     typeof value === "string" ? Number(value) :
@@ -20,14 +26,18 @@ function toPositiveInt(value: unknown, fallback: number) {
  * Refresca valoración de un item concreto
  *
  * DEBUG TEMPORAL:
- * - imprime el ID solicitado
+ * - limpia el ID solicitado
  * - imprime algunos items visibles para el backend
+ * - compara si el ID existe entre los visibles
  */
 export const refreshItemValuation = async (req: Request, res: Response) => {
   try {
-    const id = String(req.params.id);
+    const rawId = req.params.id;
+    const id = cleanId(rawId);
 
-    console.log("[internal.refreshItemValuation] REQUESTED ITEM ID:", id);
+    console.log("[internal.refreshItemValuation] RAW ITEM ID:", JSON.stringify(rawId));
+    console.log("[internal.refreshItemValuation] CLEAN ITEM ID:", JSON.stringify(id));
+    console.log("[internal.refreshItemValuation] CLEAN ITEM ID LENGTH:", id.length);
 
     const debugItems = await prisma.item.findMany({
       select: {
@@ -42,9 +52,16 @@ export const refreshItemValuation = async (req: Request, res: Response) => {
       }
     });
 
+    const exactVisibleMatch = debugItems.find((debugItem) => debugItem.id === id);
+
     console.log(
       "[internal.refreshItemValuation] ITEMS VISIBLE TO BACKEND:",
       debugItems
+    );
+
+    console.log(
+      "[internal.refreshItemValuation] EXACT VISIBLE MATCH:",
+      exactVisibleMatch ?? null
     );
 
     const item = await prisma.item.findUnique({
@@ -54,7 +71,10 @@ export const refreshItemValuation = async (req: Request, res: Response) => {
     if (!item) {
       return res.status(404).json({
         message: "Item not found",
+        rawRequestedId: rawId,
         requestedId: id,
+        requestedIdLength: id.length,
+        exactVisibleMatch: exactVisibleMatch ?? null,
         backendVisibleItems: debugItems
       });
     }
@@ -127,7 +147,7 @@ export const refreshAllValuations = async (req: Request, res: Response) => {
  */
 export const getItemScraperLogs = async (req: Request, res: Response) => {
   try {
-    const id = String(req.params.id);
+    const id = cleanId(req.params.id);
     const take = Math.min(toPositiveInt(req.query.take, 50), 200);
 
     const item = await prisma.item.findUnique({
@@ -145,7 +165,7 @@ export const getItemScraperLogs = async (req: Request, res: Response) => {
     });
 
     if (!item) {
-      return res.status(404).json({ message: "Item not found" });
+      return res.status(404).json({ message: "Item not found", requestedId: id });
     }
 
     const logs = await prisma.scraperRunLog.findMany({
@@ -192,7 +212,7 @@ export const getScraperLogs = async (req: Request, res: Response) => {
       typeof req.query.status === "string" ? req.query.status : undefined;
 
     const itemId =
-      typeof req.query.itemId === "string" ? req.query.itemId : undefined;
+      typeof req.query.itemId === "string" ? cleanId(req.query.itemId) : undefined;
 
     const userId =
       typeof req.query.userId === "string" ? req.query.userId : undefined;
