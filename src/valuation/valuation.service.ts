@@ -1,7 +1,7 @@
 import { Item } from "@prisma/client";
 import prisma from "../prisma/client";
-import { getCexPrice } from "./sources/cex.source";
-import { getGamePrice } from "./sources/game.source";
+import { getWorldViceousPrice } from "./sources/world-viceous.source";
+import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import {
   ScraperAttemptLog,
@@ -20,8 +20,8 @@ type SourceDefinition = {
 };
 
 const sources: SourceDefinition[] = [
-  { name: "cex", handler: getCexPrice },
-  { name: "game", handler: getGamePrice },
+  { name: "world_viceous", handler: getWorldViceousPrice },
+  { name: "chollo_games", handler: getCholloGamesPrice },
   { name: "juegos_mesa_redonda", handler: getJuegosMesaRedondaPrice }
 ];
 
@@ -165,7 +165,8 @@ async function scrapeValuation(item: Item): Promise<{
 }
 
 /**
- * 🔵 Lectura pura (NO scrapea)
+ * 🔵 Lectura pura.
+ * NO scrapea nunca.
  */
 export async function getValuation(
   item: Item,
@@ -192,7 +193,8 @@ export async function getValuation(
 }
 
 /**
- * 🟡 Escritura (único punto que scrapea)
+ * 🟡 Escritura/background.
+ * Único punto que scrapea fuentes externas.
  */
 export async function refreshValuation(
   item: Item
@@ -252,7 +254,7 @@ export async function refreshValuation(
 }
 
 /**
- * 🧠 Utilidad para jobs
+ * 🧠 Utilidad para jobs.
  */
 export async function needsValuationRefresh(item: Item): Promise<boolean> {
   const key = buildCacheKey(item);
