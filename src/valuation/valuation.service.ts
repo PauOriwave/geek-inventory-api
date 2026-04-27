@@ -25,18 +25,21 @@ const sources: SourceDefinition[] = [
   { name: "juegos_mesa_redonda", handler: getJuegosMesaRedondaPrice }
 ];
 
-// ⏱️ 24h cache
 const CACHE_TTL_HOURS = 24;
 
 function buildCacheKey(item: Item) {
   return `${item.name}_${item.platform ?? ""}_${item.region ?? ""}`.toLowerCase();
 }
 
+/**
+ * Query base para logs/fallback.
+ *
+ * IMPORTANTE:
+ * Para scraping NO conviene meter region tipo PAL.
+ * Muchas tiendas no lo incluyen en el título y mata resultados.
+ */
 function buildSourceQuery(item: Item) {
-  return [item.name, item.platform ?? "", item.region ?? ""]
-    .map((v) => String(v || "").trim())
-    .filter(Boolean)
-    .join(" ");
+  return String(item.name || "").trim();
 }
 
 function getCacheAgeHours(date: Date) {
