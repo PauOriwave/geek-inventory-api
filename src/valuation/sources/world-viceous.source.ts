@@ -66,12 +66,9 @@ export async function getWorldViceousPrice(
   return null;
 }
 
-/* ---------------- SEARCH STRATEGY ---------------- */
-
 function buildSearchQueries(name: string): string[] {
   const clean = name.trim();
-
-  const parts = clean.split(" ");
+  const parts = clean.split(" ").filter(Boolean);
 
   return [
     clean,
@@ -79,10 +76,8 @@ function buildSearchQueries(name: string): string[] {
     parts.slice(0, 3).join(" "),
     parts.slice(0, 2).join(" "),
     parts[0]
-  ];
+  ].filter(Boolean);
 }
-
-/* ---------------- FETCH ---------------- */
 
 async function fetchHtml(url: string): Promise<string | null> {
   const controller = new AbortController();
@@ -113,8 +108,6 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-/* ---------------- CANDIDATES ---------------- */
-
 function extractCandidates(html: string): Candidate[] {
   const $ = cheerio.load(html);
   const candidates: Candidate[] = [];
@@ -132,6 +125,7 @@ function extractCandidates(html: string): Candidate[] {
       link.find("span").text().trim() ||
       link.text().trim() ||
       link.attr("title") ||
+      titleFromProductUrl(url) ||
       "";
 
     const priceText =
@@ -156,23 +150,60 @@ function extractCandidates(html: string): Candidate[] {
   return candidates;
 }
 
-/* ---------------- DETAIL ---------------- */
-
 async function fetchDetailPrice(url: string): Promise<number | null> {
   const html = await fetchHtml(url);
   if (!html) return null;
 
   const $ = cheerio.load(html);
 
-  const priceText =
-    $(".price-item--sale").first().text().trim() ||
-    $(".price-item--regular").first().text().trim() ||
-    $(".price").first().text().trim();
+  const domPrice =
+    parseLastEuroPrice($(".price-item--sale").first().text()) ??
+    parseLastEuroPrice($(".price-item--regular").first().text()) ??
+    parseLastEuroPrice($(".price").first().text());
 
-  return parseLastEuroPrice(priceText);
+  const jsonPrice = extractShopifyJsonPrice(html);
+
+  console.log("🎮 WV price debug:", {
+    domPrice,
+    jsonPrice
+  });
+
+  return jsonPrice ?? domPrice ?? null;
 }
 
-/* ---------------- MATCHING ---------------- */
+function extractShopifyJsonPrice(html: string): number | null {
+  const prices: number[] = [];
+
+  const variantPriceMatches = [
+    ...html.matchAll(/"price"\s*:\s*(\d+)/g),
+    ...html.matchAll(/"compare_at_price"\s*:\s*(\d+)/g)
+  ];
+
+  for (const match of variantPriceMatches) {
+    const raw = match[1];
+    if (!raw) continue;
+
+    const value = Number(raw);
+
+    if (!Number.isFinite(value) || value <= 0) continue;
+
+    const price = value / 100;
+
+    if (price > 0) {
+      prices.push(price);
+    }
+  }
+
+  if (prices.length === 0) {
+    return null;
+  }
+
+  const uniquePrices = [...new Set(prices)]
+    .filter((price) => price > 0)
+    .sort((a, b) => b - a);
+
+  return uniquePrices[0] ?? null;
+}
 
 function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | null {
   const wanted = normalizeSearchText(item.name);
@@ -187,7 +218,7 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
     if (title.includes(wanted)) score += 0.25;
 
-    if (wantedTokens.every((t) => title.includes(t))) {
+    if (wantedTokens.every((token) => title.includes(token))) {
       score += 0.2;
     }
 
@@ -205,7 +236,7 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
     scored.slice(0, 5).map((s) => ({
       title: s.candidate.title,
       price: s.candidate.price,
-      score: s.score
+      score: Number(s.score.toFixed(2))
     }))
   );
 
@@ -214,16 +245,17 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
   return scored[0].candidate;
 }
 
-/* ---------------- PRICE ---------------- */
-
-function chooseFinalPrice(listingPrice: number, detailPrice: number | null): number {
+function chooseFinalPrice(
+  listingPrice: number,
+  detailPrice: number | null
+): number {
   if (!detailPrice || detailPrice <= 0) return listingPrice;
 
   const diff = Math.abs(detailPrice - listingPrice);
 
   if (diff <= listingPrice * 0.25) return detailPrice;
 
-  return listingPrice;
+  return detailPrice;
 }
 
 function parseLastEuroPrice(text: string | null | undefined): number | null {
@@ -231,13 +263,12 @@ function parseLastEuroPrice(text: string | null | undefined): number | null {
   const matches = [...value.matchAll(/(\d+(?:[.,]\d{2})?)\s*€/g)];
 
   if (matches.length > 0) {
-    return parseEuroPrice(matches[matches.length - 1][1]);
+    const last = matches[matches.length - 1]?.[1];
+    return parseEuroPrice(last ?? null);
   }
 
   return parseEuroPrice(value);
 }
-
-/* ---------------- UTILS ---------------- */
 
 function normalizeSearchText(value: string): string {
   return normalizeText(value)
@@ -254,6 +285,20 @@ function cleanTitle(value: string): string {
     .replace(/Sold out/gi, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function titleFromProductUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
+
+    return last
+      .replace(/-/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  } catch {
+    return "";
+  }
 }
 
 function absolutize(href: string): string {
