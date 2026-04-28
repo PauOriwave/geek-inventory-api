@@ -1,8 +1,11 @@
 import { Item } from "@prisma/client";
 import prisma from "../prisma/client";
+
 import { getWorldViceousPrice } from "./sources/world-viceous.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
+import { getNormaComicsPrice } from "./sources/norma-comics.source";
+
 import {
   ScraperAttemptLog,
   ScraperSourceResult
@@ -33,6 +36,11 @@ const sources: SourceDefinition[] = [
     name: "chollo_games",
     priority: 80,
     handler: getCholloGamesPrice
+  },
+  {
+    name: "norma_comics",
+    priority: 82,
+    handler: getNormaComicsPrice
   },
   {
     name: "juegos_mesa_redonda",
@@ -133,7 +141,6 @@ async function scrapeValuation(item: Item): Promise<{
           confidence: result.confidence,
           matchedTitle: result.matchedTitle
         });
-
         continue;
       }
 
@@ -166,7 +173,9 @@ async function scrapeValuation(item: Item): Promise<{
       valuation: {
         price: Number(highConfidenceBest.price.toFixed(2)),
         source: highConfidenceBest.source,
-        confidence: Number(Math.min(0.95, highConfidenceBest.confidence).toFixed(2))
+        confidence: Number(
+          Math.min(0.95, highConfidenceBest.confidence).toFixed(2)
+        )
       },
       attempts
     };
@@ -204,16 +213,7 @@ function pickHighConfidenceBest(
 
   const best = highConfidence[0];
 
-  if (!best) {
-    return null;
-  }
-
-  console.log("[valuation] Using high confidence single source:", {
-    source: best.source,
-    price: best.price,
-    confidence: best.confidence,
-    matchedTitle: best.matchedTitle
-  });
+  console.log("[valuation] Using high confidence source:", best.source);
 
   return best;
 }
@@ -263,13 +263,11 @@ function calculateWeightedValuation(
 
 function getSourcePriority(sourceName: string): number {
   const source = sources.find((entry) => entry.name === sourceName);
-
   return source?.priority ?? 50;
 }
 
 /**
- * 🔵 Lectura pura.
- * NO scrapea nunca.
+ * 🔵 SOLO LECTURA
  */
 export async function getValuation(
   item: Item,
@@ -296,8 +294,7 @@ export async function getValuation(
 }
 
 /**
- * 🟡 Escritura/background.
- * Único punto que scrapea fuentes externas.
+ * 🟡 REFRESH (SCRAPING)
  */
 export async function refreshValuation(
   item: Item
@@ -357,7 +354,7 @@ export async function refreshValuation(
 }
 
 /**
- * 🧠 Utilidad para jobs.
+ * 🧠 UTIL JOB
  */
 export async function needsValuationRefresh(item: Item): Promise<boolean> {
   const key = buildCacheKey(item);
