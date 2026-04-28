@@ -16,13 +16,29 @@ type ValuationResult = {
 
 type SourceDefinition = {
   name: string;
+  priority: number;
   handler: (item: Item) => Promise<ScraperSourceResult | null>;
 };
 
+const MIN_CONFIDENCE_FOR_VALUATION = 0.5;
+const HIGH_CONFIDENCE_THRESHOLD = 0.88;
+
 const sources: SourceDefinition[] = [
-  { name: "world_viceous", handler: getWorldViceousPrice },
-  { name: "chollo_games", handler: getCholloGamesPrice },
-  { name: "juegos_mesa_redonda", handler: getJuegosMesaRedondaPrice }
+  {
+    name: "world_viceous",
+    priority: 90,
+    handler: getWorldViceousPrice
+  },
+  {
+    name: "chollo_games",
+    priority: 80,
+    handler: getCholloGamesPrice
+  },
+  {
+    name: "juegos_mesa_redonda",
+    priority: 85,
+    handler: getJuegosMesaRedondaPrice
+  }
 ];
 
 const CACHE_TTL_HOURS = 24;
@@ -31,13 +47,6 @@ function buildCacheKey(item: Item) {
   return `${item.name}_${item.platform ?? ""}_${item.region ?? ""}`.toLowerCase();
 }
 
-/**
- * Query base para logs/fallback.
- *
- * IMPORTANTE:
- * Para scraping NO conviene meter region tipo PAL.
- * Muchas tiendas no lo incluyen en el título y mata resultados.
- */
 function buildSourceQuery(item: Item) {
   return String(item.name || "").trim();
 }
@@ -82,7 +91,7 @@ async function scrapeValuation(item: Item): Promise<{
     sources.map(async (source) => {
       const result = await source.handler(item);
       return {
-        source: source.name,
+        source,
         result
       };
     })
@@ -107,8 +116,6 @@ async function scrapeValuation(item: Item): Promise<{
         continue;
       }
 
-      valid.push(result);
-
       attempts.push({
         source: sourceName,
         query: result.query ?? defaultQuery,
@@ -119,6 +126,18 @@ async function scrapeValuation(item: Item): Promise<{
         confidence: result.confidence
       });
 
+      if (result.confidence < MIN_CONFIDENCE_FOR_VALUATION) {
+        console.log("[valuation] Ignoring low confidence result:", {
+          source: result.source,
+          price: result.price,
+          confidence: result.confidence,
+          matchedTitle: result.matchedTitle
+        });
+
+        continue;
+      }
+
+      valid.push(result);
       continue;
     }
 
@@ -140,31 +159,112 @@ async function scrapeValuation(item: Item): Promise<{
     };
   }
 
-  const totalWeight = valid.reduce((acc, v) => acc + v.confidence, 0);
+  const highConfidenceBest = pickHighConfidenceBest(valid);
 
-  if (totalWeight === 0) {
+  if (highConfidenceBest) {
     return {
-      valuation: null,
+      valuation: {
+        price: Number(highConfidenceBest.price.toFixed(2)),
+        source: highConfidenceBest.source,
+        confidence: Number(Math.min(0.95, highConfidenceBest.confidence).toFixed(2))
+      },
       attempts
     };
   }
 
-  const weightedPrice =
-    valid.reduce((acc, v) => acc + v.price * v.confidence, 0) / totalWeight;
-
-  const mergedSources = [...new Set(valid.map((v) => v.source))].join("+");
-
-  const avgConfidence =
-    valid.reduce((acc, v) => acc + v.confidence, 0) / valid.length;
+  const weighted = calculateWeightedValuation(valid);
 
   return {
-    valuation: {
-      price: Number(weightedPrice.toFixed(2)),
-      source: mergedSources,
-      confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
-    },
+    valuation: weighted,
     attempts
   };
+}
+
+function pickHighConfidenceBest(
+  results: ScraperSourceResult[]
+): ScraperSourceResult | null {
+  const highConfidence = results.filter(
+    (result) => result.confidence >= HIGH_CONFIDENCE_THRESHOLD
+  );
+
+  if (highConfidence.length === 0) {
+    return null;
+  }
+
+  highConfidence.sort((a, b) => {
+    const aPriority = getSourcePriority(a.source);
+    const bPriority = getSourcePriority(b.source);
+
+    if (b.confidence !== a.confidence) {
+      return b.confidence - a.confidence;
+    }
+
+    return bPriority - aPriority;
+  });
+
+  const best = highConfidence[0];
+
+  if (!best) {
+    return null;
+  }
+
+  console.log("[valuation] Using high confidence single source:", {
+    source: best.source,
+    price: best.price,
+    confidence: best.confidence,
+    matchedTitle: best.matchedTitle
+  });
+
+  return best;
+}
+
+function calculateWeightedValuation(
+  results: ScraperSourceResult[]
+): ValuationResult | null {
+  const weightedResults = results.map((result) => {
+    const priority = getSourcePriority(result.source);
+    const weight = result.confidence * priority;
+
+    return {
+      result,
+      weight
+    };
+  });
+
+  const totalWeight = weightedResults.reduce(
+    (acc, entry) => acc + entry.weight,
+    0
+  );
+
+  if (totalWeight <= 0) {
+    return null;
+  }
+
+  const weightedPrice =
+    weightedResults.reduce(
+      (acc, entry) => acc + entry.result.price * entry.weight,
+      0
+    ) / totalWeight;
+
+  const mergedSources = [
+    ...new Set(weightedResults.map((entry) => entry.result.source))
+  ].join("+");
+
+  const avgConfidence =
+    weightedResults.reduce((acc, entry) => acc + entry.result.confidence, 0) /
+    weightedResults.length;
+
+  return {
+    price: Number(weightedPrice.toFixed(2)),
+    source: mergedSources,
+    confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
+  };
+}
+
+function getSourcePriority(sourceName: string): number {
+  const source = sources.find((entry) => entry.name === sourceName);
+
+  return source?.priority ?? 50;
 }
 
 /**
