@@ -17,89 +17,59 @@ export async function getCasaDelLibroPrice(
 ): Promise<ScraperSourceResult | null> {
   if (item.category !== "book") return null;
 
-  const queries = buildSearchQueries(item.name);
+  const query = cleanQuery(item.name);
+  if (!query) return null;
 
-  for (const query of queries) {
-    const searchUrl = `${BASE_URL}/busqueda-libros?busqueda=${encodeURIComponent(
-      query
-    )}`;
+  const searchUrl = `${BASE_URL}/busqueda-libros?busqueda=${encodeURIComponent(query)}`;
 
-    console.log("📚 CDL Searching:", searchUrl);
+  console.log("📚 CDL Searching:", searchUrl);
 
-    const html = await fetchHtml(searchUrl);
-    if (!html) continue;
+  const html = await fetchHtml(searchUrl);
+  if (!html) return null;
 
-    console.log("📚 CDL html length:", html.length, "query:", query);
+  console.log("📚 CDL html length:", html.length);
 
-    const candidates = extractCandidates(html);
+  const candidates = extractCandidates(html);
 
-    console.log("📚 CDL candidates:", candidates.length, query);
+  console.log("📚 CDL candidates:", candidates.length);
 
-    if (candidates.length === 0) {
-      logHtmlDiagnostics(html);
-      continue;
-    }
-
-    const best = pickBestCandidate(item, candidates);
-
-    if (!best) {
-      console.log("📚 CDL candidates found but no match:", query);
-      continue;
-    }
-
-    const detail = await fetchDetail(best.url);
-    const detailPrice = detail?.price ?? null;
-    const detailTitle = detail?.title ?? null;
-
-    const finalPrice = chooseFinalPrice(best.price, detailPrice);
-
-    if (!finalPrice || finalPrice <= 0) {
-      console.log("📚 CDL matched product but no usable price:", {
-        title: best.title,
-        url: best.url,
-        listingPrice: best.price,
-        detailPrice
-      });
-      continue;
-    }
-
-    const matchedTitle = detailTitle || best.title;
-
-    console.log("📚 CDL selected:", {
-      title: matchedTitle,
-      listingPrice: best.price,
-      detailPrice,
-      finalPrice,
-      url: best.url
-    });
-
-    return {
-      price: Number(finalPrice.toFixed(2)),
-      source: "casa_del_libro",
-      confidence: computeConfidence(item, matchedTitle),
-      matchedTitle,
-      matchedUrl: best.url,
-      query
-    };
+  if (candidates.length === 0) {
+    logHtmlDiagnostics(html);
+    return null;
   }
 
-  return null;
-}
+  const best = pickBestCandidate(item, candidates);
 
-function buildSearchQueries(name: string): string[] {
-  const clean = cleanQuery(name);
-  const parts = clean.split(" ").filter(Boolean);
+  if (!best) {
+    console.log("📚 CDL no match");
+    return null;
+  }
 
-  return [
-    clean,
-    parts.slice(0, 7).join(" "),
-    parts.slice(0, 6).join(" "),
-    parts.slice(0, 5).join(" "),
-    parts.slice(0, 4).join(" ")
-  ]
-    .map((query) => query.trim())
-    .filter(Boolean)
-    .filter((query, index, arr) => arr.indexOf(query) === index);
+  const detail = await fetchDetail(best.url);
+
+  if (!detail?.price || detail.price <= 0) {
+    console.log("📚 CDL matched but no price:", best);
+    return null;
+  }
+
+  const matchedTitle = detail.title || best.title;
+  const confidence = computeConfidence(item, matchedTitle);
+
+  console.log("📚 CDL selected:", {
+    title: matchedTitle,
+    price: detail.price,
+    confidence,
+    url: best.url
+  });
+
+  return {
+    price: Number(detail.price.toFixed(2)),
+    source: "casa_del_libro",
+    confidence,
+    matchedTitle,
+    matchedUrl: best.url,
+    query
+  };
 }
 
 async function fetchHtml(url: string): Promise<string | null> {
@@ -135,236 +105,44 @@ async function fetchHtml(url: string): Promise<string | null> {
 }
 
 function extractCandidates(html: string): Candidate[] {
-  const $ = cheerio.load(html);
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
 
-  extractCards($, candidates, seen);
-  extractProductLinks($, candidates, seen);
-  extractJsonLdCandidates($, candidates, seen);
-  extractRawProductUrls(html, candidates, seen);
+  const normalizedHtml = decodeHtml(html)
+    .replace(/\\u002F/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/%2F/gi, "/");
 
-  return candidates;
-}
-
-function extractCards(
-  $: cheerio.CheerioAPI,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  const selectors = [
-    "[class*='product']",
-    "[class*='book']",
-    "[class*='card']",
-    "article",
-    "li"
+  const patterns = [
+    /https?:\/\/www\.casadellibro\.com\/(?:libro|ebook)-[^"'<>\\\s]+\/\d+\/\d+/gi,
+    /\/(?:libro|ebook)-[^"'<>\\\s]+\/\d+\/\d+/gi,
+    /https?:\/\/www\.casadellibro\.com\/vender-libro\/[^"'<>\\\s]+\/\d+\/\d+/gi,
+    /\/vender-libro\/[^"'<>\\\s]+\/\d+\/\d+/gi
   ];
 
-  for (const selector of selectors) {
-    $(selector).each((_, el) => {
-      const root = $(el);
+  for (const pattern of patterns) {
+    for (const match of normalizedHtml.matchAll(pattern)) {
+      const rawUrl = match[0];
+      const url = absolutize(rawUrl);
 
-      const title =
-        root.find("[class*='title']").first().text().trim() ||
-        root.find("[class*='name']").first().text().trim() ||
-        root.find("h2").first().text().trim() ||
-        root.find("h3").first().text().trim() ||
-        root.find("a[title]").first().attr("title")?.trim() ||
-        root.find("img[alt]").first().attr("alt")?.trim() ||
-        root.find("a").first().text().trim() ||
-        "";
+      if (!looksLikeProductUrl(url)) continue;
 
-      const href =
-        root.find("a[href*='/libro-']").first().attr("href") ||
-        root.find("a[href*='/ebook-']").first().attr("href") ||
-        root.find("a[href*='/libros/']").first().attr("href") ||
-        root.find("a[href]").first().attr("href") ||
-        "";
+      const title = titleFromProductUrl(url);
+      if (!title) continue;
 
-      const priceText =
-        root.find("[class*='price']").first().text().trim() ||
-        root.find("[data-price]").first().attr("data-price") ||
-        root.text();
+      const key = `${normalizeText(title)}|${url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-      addCandidate({
+      candidates.push({
         title,
-        href,
-        priceText,
-        candidates,
-        seen,
-        allowNullPrice: true
+        price: null,
+        url
       });
-    });
-  }
-}
-
-function extractProductLinks(
-  $: cheerio.CheerioAPI,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  $("a[href]").each((_, el) => {
-    const link = $(el);
-    const href = link.attr("href") || "";
-    const absoluteUrl = absolutize(href);
-
-    if (!looksLikeProductUrl(absoluteUrl)) return;
-
-    const root = link.closest("li, article, div, section");
-
-    const imgAlt = link.find("img").first().attr("alt")?.trim() || "";
-
-    const title =
-      link.attr("title")?.trim() ||
-      imgAlt ||
-      normalizeLinkText(link.text()) ||
-      root
-        .find("h1, h2, h3, [class*='title'], [class*='name'], img[alt]")
-        .first()
-        .attr("alt")
-        ?.trim() ||
-      root
-        .find("h1, h2, h3, [class*='title'], [class*='name']")
-        .first()
-        .text()
-        .trim() ||
-      titleFromProductUrl(absoluteUrl);
-
-    const priceText =
-      root.find("[class*='price']").first().text().trim() ||
-      root.find("[data-price]").first().attr("data-price") ||
-      root.text();
-
-    addCandidate({
-      title,
-      href: absoluteUrl,
-      priceText,
-      candidates,
-      seen,
-      allowNullPrice: true
-    });
-  });
-}
-
-function extractJsonLdCandidates(
-  $: cheerio.CheerioAPI,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  $("script[type='application/ld+json']").each((_, el) => {
-    const raw = $(el).text();
-    if (!raw) return;
-
-    try {
-      const parsed = JSON.parse(raw);
-      extractJsonLdNode(parsed, candidates, seen);
-    } catch {
-      return;
     }
-  });
-}
-
-function extractJsonLdNode(
-  node: any,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  if (!node) return;
-
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      extractJsonLdNode(child, candidates, seen);
-    }
-    return;
   }
 
-  if (typeof node !== "object") return;
-
-  if (node["@graph"]) {
-    extractJsonLdNode(node["@graph"], candidates, seen);
-  }
-
-  const type = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
-
-  if (!type.includes("Product") && !type.includes("Book")) return;
-
-  const title = typeof node.name === "string" ? node.name : "";
-  const href = typeof node.url === "string" ? node.url : "";
-
-  const offer = Array.isArray(node.offers) ? node.offers[0] : node.offers;
-
-  const priceText =
-    offer?.price ??
-    offer?.lowPrice ??
-    offer?.highPrice ??
-    node.price ??
-    "";
-
-  addCandidate({
-    title,
-    href,
-    priceText: String(priceText),
-    candidates,
-    seen,
-    allowNullPrice: true
-  });
-}
-
-function extractRawProductUrls(
-  html: string,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  const regex =
-    /https?:\/\/www\.casadellibro\.com\/(?:libro|ebook)-[^"'<>\\\s]+\/\d+\/\d+/gi;
-
-  const matches = html.match(regex) ?? [];
-
-  for (const rawUrl of matches) {
-    const url = decodeHtml(rawUrl);
-
-    if (!looksLikeProductUrl(url)) continue;
-
-    addCandidate({
-      title: titleFromProductUrl(url),
-      href: url,
-      priceText: "",
-      candidates,
-      seen,
-      allowNullPrice: true
-    });
-  }
-}
-
-function addCandidate(input: {
-  title: string;
-  href: string;
-  priceText: string;
-  candidates: Candidate[];
-  seen: Set<string>;
-  allowNullPrice?: boolean;
-}) {
-  const url = absolutize(input.href);
-
-  if (!looksLikeProductUrl(url)) return;
-
-  const title = cleanTitle(input.title || titleFromProductUrl(url));
-  const price = parsePrice(input.priceText);
-
-  if (!title || !url) return;
-
-  if ((price == null || price <= 0) && !input.allowNullPrice) return;
-
-  const key = `${normalizeText(title)}|${price ?? "null"}|${url}`;
-
-  if (input.seen.has(key)) return;
-  input.seen.add(key);
-
-  input.candidates.push({
-    title,
-    price: price != null && price > 0 ? price : null,
-    url
-  });
+  return candidates;
 }
 
 async function fetchDetail(
@@ -383,6 +161,7 @@ async function fetchDetail(
     null;
 
   const price =
+    parsePrice($("#p-pf-f").first().text().trim()) ??
     parsePrice($("meta[property='product:price:amount']").attr("content")) ??
     parsePrice($("meta[itemprop='price']").attr("content")) ??
     parsePrice($("[itemprop='price']").first().attr("content")) ??
@@ -405,8 +184,15 @@ async function fetchDetail(
 
 function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | null {
   const wanted = normalizeSearchText(item.name);
-  const wantedTokens = wanted.split(" ").filter(Boolean);
   const importantTokens = getImportantTokens(wanted);
+
+  console.log(
+    "📚 CDL raw candidates:",
+    candidates.slice(0, 20).map((candidate) => ({
+      title: candidate.title,
+      url: candidate.url
+    }))
+  );
 
   const filtered = candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
@@ -419,28 +205,14 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   console.log("📚 CDL filtered candidates:", filtered.length);
 
-  if (filtered.length === 0) {
-    return null;
-  }
-
   const scored = filtered.map((candidate) => {
     const title = normalizeSearchText(candidate.title);
-    const url = normalizeSearchText(candidate.url);
+    const urlSlug = normalizeSearchText(candidate.url).replace(/\s+/g, "-");
 
     let score = similarityScore(wanted, title);
 
     if (title.includes(wanted)) score += 0.3;
-
-    if (
-      wantedTokens.length > 0 &&
-      wantedTokens.every((token) => title.includes(token) || url.includes(token))
-    ) {
-      score += 0.2;
-    }
-
-    if (candidate.price != null && candidate.price > 0) {
-      score += 0.05;
-    }
+    if (urlSlug.includes(wanted.replace(/\s+/g, "-"))) score += 0.25;
 
     return {
       candidate,
@@ -451,10 +223,9 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
   scored.sort((a, b) => b.score - a.score);
 
   console.log(
-    "📚 CDL top filtered:",
+    "📚 CDL top:",
     scored.slice(0, 8).map((s) => ({
       title: s.candidate.title,
-      price: s.candidate.price,
       score: Number(s.score.toFixed(2)),
       url: s.candidate.url
     }))
@@ -462,33 +233,9 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   const best = scored[0];
 
-  if (!best || best.score < 0.5) return null;
+  if (!best || best.score < 0.45) return null;
 
   return best.candidate;
-}
-
-function chooseFinalPrice(
-  listingPrice: number | null,
-  detailPrice: number | null
-): number | null {
-  if (listingPrice == null || listingPrice <= 0) {
-    return detailPrice && detailPrice > 0 ? detailPrice : null;
-  }
-
-  if (!detailPrice || detailPrice <= 0) return listingPrice;
-
-  const difference = Math.abs(detailPrice - listingPrice);
-  const maxAllowedDifference = listingPrice * 0.25;
-
-  if (difference <= maxAllowedDifference) return detailPrice;
-
-  console.log("⚠️ CDL detail price rejected:", {
-    listingPrice,
-    detailPrice,
-    difference
-  });
-
-  return listingPrice;
 }
 
 function parsePrice(text: string | null | undefined): number | null {
@@ -531,7 +278,14 @@ function titleFromProductUrl(url: string): string {
   try {
     const parsed = new URL(url);
     const parts = parsed.pathname.split("/").filter(Boolean);
-    const slug = parts[0] || "";
+
+    let slug = "";
+
+    if (parts[0] === "vender-libro") {
+      slug = parts[1] || "";
+    } else {
+      slug = parts[0] || "";
+    }
 
     return slug
       .replace(/^libro-/, "")
@@ -596,19 +350,9 @@ function cleanQuery(value: string): string {
 function cleanTitle(value: string): string {
   return String(value || "")
     .replace(/\s+/g, " ")
-    .replace(/Añadir/gi, "")
     .replace(/Comprar/gi, "")
     .replace(/Ver ficha/gi, "")
     .replace(/Oferta/gi, "")
-    .trim();
-}
-
-function normalizeLinkText(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .replace(/Añadir/gi, "")
-    .replace(/Comprar/gi, "")
-    .replace(/Ver ficha/gi, "")
     .trim();
 }
 
@@ -623,19 +367,37 @@ function looksLikeProductUrl(url: string): boolean {
   if (normalized.includes("/busqueda")) return false;
   if (normalized.includes("/libros-ebooks/")) return false;
 
-  return normalized.includes("/libro-") || normalized.includes("/ebook-");
+  return (
+    normalized.includes("/libro-") ||
+    normalized.includes("/ebook-") ||
+    normalized.includes("/vender-libro/")
+  );
 }
 
 function logHtmlDiagnostics(html: string) {
-  const productUrlMatches = html.match(
-    /https?:\/\/www\.casadellibro\.com\/(?:libro|ebook)-[^"'<>\\\s]+\/\d+\/\d+/gi
-  );
+  const normalizedHtml = decodeHtml(html)
+    .replace(/\\u002F/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/%2F/gi, "/");
+
+  const productUrlMatches = [
+    ...(normalizedHtml.match(
+      /https?:\/\/www\.casadellibro\.com\/(?:libro|ebook)-[^"'<>\\\s]+\/\d+\/\d+/gi
+    ) ?? []),
+    ...(normalizedHtml.match(
+      /\/(?:libro|ebook)-[^"'<>\\\s]+\/\d+\/\d+/gi
+    ) ?? []),
+    ...(normalizedHtml.match(
+      /\/vender-libro\/[^"'<>\\\s]+\/\d+\/\d+/gi
+    ) ?? [])
+  ];
 
   console.log("📚 CDL diagnostics:", {
-    containsLibroUrl: html.includes("/libro-"),
-    containsEbookUrl: html.includes("/ebook-"),
-    containsPriceText: html.includes("€"),
-    sampleProductUrls: productUrlMatches?.slice(0, 5) ?? []
+    containsLibroUrl: normalizedHtml.includes("/libro-"),
+    containsVenderLibroUrl: normalizedHtml.includes("/vender-libro/"),
+    containsKafkaEnLaOrilla: normalizedHtml.includes("kafka-en-la-orilla"),
+    containsEuro: normalizedHtml.includes("€"),
+    sampleProductUrls: productUrlMatches.slice(0, 10)
   });
 }
 
