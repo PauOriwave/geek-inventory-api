@@ -218,11 +218,13 @@ function extractProductLinks(
       link.attr("title")?.trim() ||
       imgAlt ||
       normalizeLinkText(link.text()) ||
-      root.find("h1, h2, h3, [class*='title'], [class*='name'], img[alt]")
+      root
+        .find("h1, h2, h3, [class*='title'], [class*='name'], img[alt]")
         .first()
         .attr("alt")
         ?.trim() ||
-      root.find("h1, h2, h3, [class*='title'], [class*='name']")
+      root
+        .find("h1, h2, h3, [class*='title'], [class*='name']")
         .first()
         .text()
         .trim() ||
@@ -404,14 +406,30 @@ async function fetchDetail(
 function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | null {
   const wanted = normalizeSearchText(item.name);
   const wantedTokens = wanted.split(" ").filter(Boolean);
+  const importantTokens = getImportantTokens(wanted);
 
-  const scored = candidates.map((candidate) => {
+  const filtered = candidates.filter((candidate) => {
+    const title = normalizeSearchText(candidate.title);
+    const url = normalizeSearchText(candidate.url);
+
+    return importantTokens.every(
+      (token) => title.includes(token) || url.includes(token)
+    );
+  });
+
+  console.log("📚 CDL filtered candidates:", filtered.length);
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  const scored = filtered.map((candidate) => {
     const title = normalizeSearchText(candidate.title);
     const url = normalizeSearchText(candidate.url);
 
     let score = similarityScore(wanted, title);
 
-    if (title.includes(wanted)) score += 0.25;
+    if (title.includes(wanted)) score += 0.3;
 
     if (
       wantedTokens.length > 0 &&
@@ -433,7 +451,7 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
   scored.sort((a, b) => b.score - a.score);
 
   console.log(
-    "📚 CDL top candidates:",
+    "📚 CDL top filtered:",
     scored.slice(0, 8).map((s) => ({
       title: s.candidate.title,
       price: s.candidate.price,
@@ -444,7 +462,7 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   const best = scored[0];
 
-  if (!best || best.score < 0.45) return null;
+  if (!best || best.score < 0.5) return null;
 
   return best.candidate;
 }
@@ -526,6 +544,37 @@ function titleFromProductUrl(url: string): string {
   }
 }
 
+function getImportantTokens(normalizedText: string): string[] {
+  const stopWords = new Set([
+    "el",
+    "la",
+    "los",
+    "las",
+    "un",
+    "una",
+    "unos",
+    "unas",
+    "de",
+    "del",
+    "en",
+    "a",
+    "al",
+    "y",
+    "o",
+    "por",
+    "para",
+    "con",
+    "sin",
+    "the"
+  ]);
+
+  return normalizedText
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => token.length > 3)
+    .filter((token) => !stopWords.has(token));
+}
+
 function normalizeSearchText(value: string): string {
   return normalizeText(value)
     .replace(/\bedicion\b/g, "")
@@ -574,10 +623,7 @@ function looksLikeProductUrl(url: string): boolean {
   if (normalized.includes("/busqueda")) return false;
   if (normalized.includes("/libros-ebooks/")) return false;
 
-  return (
-    normalized.includes("/libro-") ||
-    normalized.includes("/ebook-")
-  );
+  return normalized.includes("/libro-") || normalized.includes("/ebook-");
 }
 
 function logHtmlDiagnostics(html: string) {
