@@ -5,6 +5,7 @@ import { getWorldViceousPrice } from "./sources/world-viceous.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
+import { getCasaDelLibroPrice } from "./sources/casa-del-libro.source";
 
 import {
   ScraperAttemptLog,
@@ -36,6 +37,11 @@ const sources: SourceDefinition[] = [
     name: "chollo_games",
     priority: 80,
     handler: getCholloGamesPrice
+  },
+  {
+    name: "casa_del_libro",
+    priority: 84,
+    handler: getCasaDelLibroPrice
   },
   {
     name: "norma_comics",
@@ -141,6 +147,7 @@ async function scrapeValuation(item: Item): Promise<{
           confidence: result.confidence,
           matchedTitle: result.matchedTitle
         });
+
         continue;
       }
 
@@ -213,7 +220,16 @@ function pickHighConfidenceBest(
 
   const best = highConfidence[0];
 
-  console.log("[valuation] Using high confidence source:", best.source);
+  if (!best) {
+    return null;
+  }
+
+  console.log("[valuation] Using high confidence source:", {
+    source: best.source,
+    price: best.price,
+    confidence: best.confidence,
+    matchedTitle: best.matchedTitle
+  });
 
   return best;
 }
@@ -268,6 +284,7 @@ function getSourcePriority(sourceName: string): number {
 
 /**
  * 🔵 SOLO LECTURA
+ * No scrapea nunca.
  */
 export async function getValuation(
   item: Item,
@@ -294,7 +311,8 @@ export async function getValuation(
 }
 
 /**
- * 🟡 REFRESH (SCRAPING)
+ * 🟡 REFRESH / BACKGROUND
+ * Único punto que scrapea fuentes externas.
  */
 export async function refreshValuation(
   item: Item
