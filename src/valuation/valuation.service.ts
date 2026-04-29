@@ -101,6 +101,9 @@ async function scrapeValuation(item: Item): Promise<{
 }> {
   const defaultQuery = buildSourceQuery(item);
 
+  console.log("[valuation] sources enabled:", sources.map((source) => source.name));
+  console.log("[valuation] item category:", item.category);
+
   const settled = await Promise.allSettled(
     sources.map(async (source) => {
       const result = await source.handler(item);
