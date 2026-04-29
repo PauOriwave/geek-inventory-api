@@ -5,7 +5,6 @@ import { getWorldViceousPrice } from "./sources/world-viceous.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
-import { getCasaDelLibroPrice } from "./sources/casa-del-libro.source";
 
 import {
   ScraperAttemptLog,
@@ -37,11 +36,6 @@ const sources: SourceDefinition[] = [
     name: "chollo_games",
     priority: 80,
     handler: getCholloGamesPrice
-  },
-  {
-    name: "casa_del_libro",
-    priority: 84,
-    handler: getCasaDelLibroPrice
   },
   {
     name: "norma_comics",
