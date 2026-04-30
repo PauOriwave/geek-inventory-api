@@ -88,15 +88,38 @@ export async function getGamePrice(
 }
 
 function buildSearchUrls(query: string): string[] {
-  const encoded = encodeURIComponent(query);
-  const slug = buildSearchSlug(query);
+  const queries = buildSearchQueries(query);
+  const urls: string[] = [];
 
-  return [
-    `${BASE_URL}/buscar/${slug}`,
-    `${BASE_URL}/buscar/${slug}/cf%3DPreowned%3A-6%3AGIDS`,
-    `${BASE_URL}/Search/?q=${encoded}`,
-    `${BASE_URL}/search?q=${encoded}`
-  ];
+  for (const searchQuery of queries) {
+    const encoded = encodeURIComponent(searchQuery);
+    const slug = buildSearchSlug(searchQuery);
+
+    urls.push(
+      `${BASE_URL}/buscar/${slug}`,
+      `${BASE_URL}/${slug}`,
+      `${BASE_URL}/Search/?q=${encoded}`,
+      `${BASE_URL}/search?q=${encoded}`
+    );
+  }
+
+  return [...new Set(urls)];
+}
+
+function buildSearchQueries(query: string): string[] {
+  const normalized = normalizeSearchText(query);
+  const queries = [query];
+
+  if (normalized.includes("dualshock")) {
+    queries.push(
+      "mando dualshock ps4",
+      "controller sony dualshock 4 v2",
+      "controller sony dualshock 4 v2 black",
+      "dualshock 4 v2 black"
+    );
+  }
+
+  return [...new Set(queries.map(cleanQuery).filter(Boolean))];
 }
 
 async function fetchHtml(url: string): Promise<string | null> {
@@ -136,11 +159,52 @@ function extractCandidates(html: string): Candidate[] {
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
 
+  extractCurrentProductPage($, candidates, seen);
   extractProductCards($, candidates, seen);
   extractProductLinks($, candidates, seen);
   extractRawProductUrls(html, candidates, seen);
 
   return candidates;
+}
+
+function extractCurrentProductPage(
+  $: cheerio.CheerioAPI,
+  candidates: Candidate[],
+  seen: Set<string>
+) {
+  const title =
+    $(".product-title").first().text().trim() ||
+    $("h1").first().text().trim() ||
+    $("meta[property='og:title']").attr("content")?.trim() ||
+    $("input[name='ProductName']").attr("value")?.trim() ||
+    "";
+
+  const priceText =
+    $(".buy--price").first().text().trim() ||
+    $(".buy--price .int").first().text().trim() +
+      "'" +
+      $(".buy--price .decimal").first().text().trim() +
+      "€" ||
+    $(".price").first().text().trim() ||
+    $(".precio").first().text().trim();
+
+  const canonical =
+    $("link[rel='canonical']").attr("href") ||
+    $("meta[property='og:url']").attr("content") ||
+    "";
+
+  if (!title) return;
+
+  const url = absolutize(canonical);
+
+  addCandidate({
+    title,
+    href: url,
+    priceText,
+    candidates,
+    seen,
+    allowNullPrice: true
+  });
 }
 
 function extractProductCards(
@@ -163,26 +227,24 @@ function extractProductCards(
     $(selector).each((_, el) => {
       const root = $(el);
 
-      const href =
-        root.find("a[href]").first().attr("href") ||
-        "";
-
+      const href = root.find("a[href]").first().attr("href") || "";
       const url = absolutize(href);
 
       if (!looksLikeProductUrl(url)) return;
 
       const title =
         root.find(".title").first().text().trim() ||
+        root.find(".product-title").first().text().trim() ||
         root.find(".nombre").first().text().trim() ||
         root.find(".name").first().text().trim() ||
         root.find("h2").first().text().trim() ||
         root.find("h3").first().text().trim() ||
         root.find("a[title]").first().attr("title")?.trim() ||
         root.find("img[alt]").first().attr("alt")?.trim() ||
-        root.find("a").first().text().trim() ||
         titleFromProductUrl(url);
 
       const priceText =
+        root.find(".buy--price").first().text().trim() ||
         root.find(".price").first().text().trim() ||
         root.find(".precio").first().text().trim() ||
         root.find("[class*='price']").first().text().trim() ||
@@ -220,18 +282,19 @@ function extractProductLinks(
       link.find("img").first().attr("alt")?.trim() ||
       normalizeLinkText(link.text()) ||
       root
-        .find("h1, h2, h3, .title, .nombre, .name, img[alt]")
+        .find("h1, h2, h3, .title, .product-title, .nombre, .name, img[alt]")
         .first()
         .attr("alt")
         ?.trim() ||
       root
-        .find("h1, h2, h3, .title, .nombre, .name")
+        .find("h1, h2, h3, .title, .product-title, .nombre, .name")
         .first()
         .text()
         .trim() ||
       titleFromProductUrl(url);
 
     const priceText =
+      root.find(".buy--price").first().text().trim() ||
       root.find(".price").first().text().trim() ||
       root.find(".precio").first().text().trim() ||
       root.find("[class*='price']").first().text().trim() ||
@@ -323,13 +386,23 @@ async function fetchDetail(
   const $ = cheerio.load(html);
 
   const title =
+    $(".product-title").first().text().trim() ||
     $("h1").first().text().trim() ||
     $("meta[property='og:title']").attr("content")?.trim() ||
     $("[itemprop='name']").first().text().trim() ||
+    $("input[name='ProductName']").attr("value")?.trim() ||
     titleFromProductUrl(url) ||
     null;
 
+  const buyPriceText =
+    $(".buy--price").first().text().trim() ||
+    $(".buy--price .int").first().text().trim() +
+      "'" +
+      $(".buy--price .decimal").first().text().trim() +
+      "€";
+
   const price =
+    parsePrice(buyPriceText) ??
     parsePrice($("meta[property='product:price:amount']").attr("content")) ??
     parsePrice($("meta[itemprop='price']").attr("content")) ??
     parsePrice($("[itemprop='price']").first().attr("content")) ??
@@ -359,7 +432,7 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   console.log(
     "🎮 GAME raw candidates:",
-    candidates.slice(0, 20).map((candidate) => ({
+    candidates.slice(0, 25).map((candidate) => ({
       title: candidate.title,
       price: candidate.price,
       url: candidate.url
@@ -424,11 +497,6 @@ function chooseFinalPrice(
 
   if (!detailPrice || detailPrice <= 0) return listingPrice;
 
-  const difference = Math.abs(detailPrice - listingPrice);
-  const maxAllowedDifference = listingPrice * 0.25;
-
-  if (difference <= maxAllowedDifference) return detailPrice;
-
   return detailPrice;
 }
 
@@ -443,6 +511,13 @@ function parsePrice(text: string | null | undefined): number | null {
   if (gameFormat) {
     const euros = gameFormat[1];
     const cents = gameFormat[2];
+    return Number(`${euros}.${cents}`);
+  }
+
+  const separatedFormat = value.match(/(\d{1,5})\s+(\d{2})\s*€/);
+  if (separatedFormat) {
+    const euros = separatedFormat[1];
+    const cents = separatedFormat[2];
     return Number(`${euros}.${cents}`);
   }
 
