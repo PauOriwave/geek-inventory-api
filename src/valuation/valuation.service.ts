@@ -2,6 +2,7 @@ import { Item } from "@prisma/client";
 import prisma from "../prisma/client";
 
 import { getWorldViceousPrice } from "./sources/world-viceous.source";
+import { getGamePrice } from "./sources/game.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
@@ -33,6 +34,11 @@ const sources: SourceDefinition[] = [
     name: "world_viceous",
     priority: 90,
     handler: getWorldViceousPrice
+  },
+  {
+    name: "game",
+    priority: 88,
+    handler: getGamePrice
   },
   {
     name: "chollo_games",
