@@ -12,10 +12,18 @@ type Candidate = {
 const BASE_URL = "https://dungeonmarvels.com";
 const REQUEST_TIMEOUT_MS = 15000;
 
+const SUPPORTED_CATEGORIES = new Set([
+  "boardgame",
+  "comic",
+  "tcg",
+  "figure",
+  "lego"
+]);
+
 export async function getDungeonMarvelsPrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
-  if (item.category !== "boardgame") return null;
+  if (!SUPPORTED_CATEGORIES.has(item.category)) return null;
 
   const query = cleanQuery(item.name);
   if (!query) return null;
@@ -471,6 +479,7 @@ function titleFromProductUrl(url: string): string {
 
     return withoutExt
       .replace(/^\d+-/, "")
+      .replace(/-\d+$/, "")
       .replace(/-/g, " ")
       .replace(/\s+/g, " ")
       .trim();

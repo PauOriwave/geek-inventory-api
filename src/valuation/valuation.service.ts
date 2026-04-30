@@ -23,6 +23,7 @@ type ValuationResult = {
 type SourceDefinition = {
   name: string;
   priority: number;
+  categories: string[];
   handler: (item: Item) => Promise<ScraperSourceResult | null>;
 };
 
@@ -33,41 +34,52 @@ const sources: SourceDefinition[] = [
   {
     name: "world_viceous",
     priority: 90,
+    categories: ["videogame"],
     handler: getWorldViceousPrice
   },
   {
     name: "chollo_games",
     priority: 80,
+    categories: ["videogame"],
     handler: getCholloGamesPrice
   },
   {
     name: "todos_tus_libros",
-    priority: 83,
+    priority: 86,
+    categories: ["book"],
     handler: getTodosTusLibrosPrice
   },
   {
     name: "la_central",
-    priority: 84,
+    priority: 76,
+    categories: ["book"],
     handler: getLaCentralPrice
   },
   {
     name: "norma_comics",
-    priority: 82,
+    priority: 86,
+    categories: ["comic", "book"],
     handler: getNormaComicsPrice
   },
   {
     name: "juegos_mesa_redonda",
     priority: 85,
+    categories: ["boardgame"],
     handler: getJuegosMesaRedondaPrice
   },
   {
     name: "dungeon_marvels",
-    priority: 84,
+    priority: 86,
+    categories: ["boardgame", "comic", "tcg", "figure", "lego"],
     handler: getDungeonMarvelsPrice
   }
 ];
 
 const CACHE_TTL_HOURS = 24;
+
+function getSourcesForItem(item: Item): SourceDefinition[] {
+  return sources.filter((source) => source.categories.includes(item.category));
+}
 
 function buildCacheKey(item: Item) {
   return `${item.name}_${item.platform ?? ""}_${item.region ?? ""}`.toLowerCase();
@@ -112,12 +124,20 @@ async function scrapeValuation(item: Item): Promise<{
   attempts: ScraperAttemptLog[];
 }> {
   const defaultQuery = buildSourceQuery(item);
+  const activeSources = getSourcesForItem(item);
 
-  console.log("[valuation] sources enabled:", sources.map((source) => source.name));
   console.log("[valuation] item category:", item.category);
+  console.log("[valuation] sources enabled:", activeSources.map((source) => source.name));
+
+  if (activeSources.length === 0) {
+    return {
+      valuation: null,
+      attempts: []
+    };
+  }
 
   const settled = await Promise.allSettled(
-    sources.map(async (source) => {
+    activeSources.map(async (source) => {
       const result = await source.handler(item);
       return {
         source,
@@ -131,7 +151,7 @@ async function scrapeValuation(item: Item): Promise<{
 
   for (let i = 0; i < settled.length; i++) {
     const entry = settled[i];
-    const sourceName = sources[i]?.name ?? "unknown";
+    const sourceName = activeSources[i]?.name ?? "unknown";
 
     if (entry.status === "fulfilled") {
       const result = entry.value.result;
