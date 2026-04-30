@@ -2,7 +2,6 @@ import { Item } from "@prisma/client";
 import prisma from "../prisma/client";
 
 import { getWorldViceousPrice } from "./sources/world-viceous.source";
-import { getGamePrice } from "./sources/game.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
@@ -36,18 +35,13 @@ const sources: SourceDefinition[] = [
     handler: getWorldViceousPrice
   },
   {
-    name: "game",
-    priority: 88,
-    handler: getGamePrice
-  },
-  {
     name: "chollo_games",
     priority: 80,
     handler: getCholloGamesPrice
   },
   {
     name: "todos_tus_libros",
-    priority: 86,
+    priority: 83,
     handler: getTodosTusLibrosPrice
   },
   {
@@ -327,7 +321,6 @@ export async function getValuation(
 
 /**
  * 🟡 REFRESH / BACKGROUND
- * Único punto que scrapea fuentes externas.
  */
 export async function refreshValuation(
   item: Item
@@ -386,9 +379,6 @@ export async function refreshValuation(
   return valuation;
 }
 
-/**
- * 🧠 UTIL JOB
- */
 export async function needsValuationRefresh(item: Item): Promise<boolean> {
   const key = buildCacheKey(item);
 
