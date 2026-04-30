@@ -188,19 +188,21 @@ async function scrapeValuation(item: Item): Promise<{
     };
   }
 
-  const highConfidenceBest = pickHighConfidenceBest(valid);
+  if (valid.length === 1) {
+    const highConfidenceBest = pickHighConfidenceBest(valid);
 
-  if (highConfidenceBest) {
-    return {
-      valuation: {
-        price: Number(highConfidenceBest.price.toFixed(2)),
-        source: highConfidenceBest.source,
-        confidence: Number(
-          Math.min(0.95, highConfidenceBest.confidence).toFixed(2)
-        )
-      },
-      attempts
-    };
+    if (highConfidenceBest) {
+      return {
+        valuation: {
+          price: Number(highConfidenceBest.price.toFixed(2)),
+          source: highConfidenceBest.source,
+          confidence: Number(
+            Math.min(0.95, highConfidenceBest.confidence).toFixed(2)
+          )
+        },
+        attempts
+      };
+    }
   }
 
   const weighted = calculateWeightedValuation(valid);
@@ -284,6 +286,12 @@ function calculateWeightedValuation(
   const avgConfidence =
     weightedResults.reduce((acc, entry) => acc + entry.result.confidence, 0) /
     weightedResults.length;
+
+  console.log("[valuation] Using weighted valuation:", {
+    sources: mergedSources,
+    price: Number(weightedPrice.toFixed(2)),
+    confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
+  });
 
   return {
     price: Number(weightedPrice.toFixed(2)),
