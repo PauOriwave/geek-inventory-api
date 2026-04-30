@@ -89,11 +89,13 @@ export async function getGamePrice(
 
 function buildSearchUrls(query: string): string[] {
   const encoded = encodeURIComponent(query);
+  const slug = buildSearchSlug(query);
 
   return [
+    `${BASE_URL}/buscar/${slug}`,
+    `${BASE_URL}/buscar/${slug}/cf%3DPreowned%3A-6%3AGIDS`,
     `${BASE_URL}/Search/?q=${encoded}`,
-    `${BASE_URL}/search?q=${encoded}`,
-    `${BASE_URL}/buscar?texto=${encoded}`
+    `${BASE_URL}/search?q=${encoded}`
   ];
 }
 
@@ -217,11 +219,13 @@ function extractProductLinks(
       link.attr("title")?.trim() ||
       link.find("img").first().attr("alt")?.trim() ||
       normalizeLinkText(link.text()) ||
-      root.find("h1, h2, h3, .title, .nombre, .name, img[alt]")
+      root
+        .find("h1, h2, h3, .title, .nombre, .name, img[alt]")
         .first()
         .attr("alt")
         ?.trim() ||
-      root.find("h1, h2, h3, .title, .nombre, .name")
+      root
+        .find("h1, h2, h3, .title, .nombre, .name")
         .first()
         .text()
         .trim() ||
@@ -256,8 +260,8 @@ function extractRawProductUrls(
     .replace(/%2F/gi, "/");
 
   const patterns = [
-    /https?:\/\/www\.game\.es\/[A-Z0-9\-\/]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/\d+/gi,
-    /\/[A-Z0-9\-\/]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/\d+/gi
+    /https?:\/\/www\.game\.es\/[a-z0-9ñáéíóúü\-\/]+\/\d+/gi,
+    /\/[a-z0-9ñáéíóúü\-\/]+\/\d+/gi
   ];
 
   for (const pattern of patterns) {
@@ -355,7 +359,7 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   console.log(
     "🎮 GAME raw candidates:",
-    candidates.slice(0, 12).map((candidate) => ({
+    candidates.slice(0, 20).map((candidate) => ({
       title: candidate.title,
       price: candidate.price,
       url: candidate.url
@@ -425,31 +429,33 @@ function chooseFinalPrice(
 
   if (difference <= maxAllowedDifference) return detailPrice;
 
-  console.log("⚠️ GAME detail price rejected:", {
-    listingPrice,
-    detailPrice,
-    difference
-  });
-
-  return listingPrice;
+  return detailPrice;
 }
 
 function parsePrice(text: string | null | undefined): number | null {
-  const value = String(text || "").trim();
+  const value = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
 
   if (!value) return null;
+
+  const gameFormat = value.match(/(\d{1,5})\s*['’]\s*(\d{2})\s*€/);
+  if (gameFormat) {
+    const euros = gameFormat[1];
+    const cents = gameFormat[2];
+    return Number(`${euros}.${cents}`);
+  }
+
+  const standardEuro = [...value.matchAll(/(\d{1,5}(?:[.,]\d{2})?)\s*€/g)];
+  if (standardEuro.length > 0) {
+    const last = standardEuro[standardEuro.length - 1]?.[1];
+    return parseEuroPrice(last ?? null);
+  }
 
   const numeric = Number(value.replace(",", "."));
 
   if (Number.isFinite(numeric) && numeric > 0) {
     return numeric;
-  }
-
-  const matches = [...value.matchAll(/(\d{1,5}(?:[.,]\d{2})?)\s*€/g)];
-
-  if (matches.length > 0) {
-    const last = matches[matches.length - 1]?.[1];
-    return parseEuroPrice(last ?? null);
   }
 
   return parseEuroPrice(value);
@@ -528,6 +534,8 @@ function normalizeSearchText(value: string): string {
     .replace(/\bmano\b/g, "")
     .replace(/\busado\b/g, "")
     .replace(/\bnuevo\b/g, "")
+    .replace(/\bseminuevo\b/g, "")
+    .replace(/\breacondicionado\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -538,11 +546,19 @@ function cleanQuery(value: string): string {
     .trim();
 }
 
+function buildSearchSlug(value: string): string {
+  return normalizeText(value)
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9ñáéíóúü-]/gi, "")
+    .toLowerCase();
+}
+
 function cleanTitle(value: string): string {
   return String(value || "")
     .replace(/\s+/g, " ")
     .replace(/Comprar/gi, "")
     .replace(/Ver ficha/gi, "")
+    .replace(/Más información/gi, "")
     .replace(/Oferta/gi, "")
     .replace(/Agotado/gi, "")
     .trim();
@@ -553,6 +569,7 @@ function normalizeLinkText(value: string): string {
     .replace(/\s+/g, " ")
     .replace(/Comprar/gi, "")
     .replace(/Ver ficha/gi, "")
+    .replace(/Más información/gi, "")
     .trim();
 }
 
@@ -562,7 +579,7 @@ function looksLikeProductUrl(url: string): boolean {
   if (!normalized.startsWith("http")) return false;
 
   if (normalized.includes("/search")) return false;
-  if (normalized.includes("/buscar")) return false;
+  if (normalized.includes("/buscar/")) return false;
   if (normalized.includes("/login")) return false;
   if (normalized.includes("/carrito")) return false;
   if (normalized.includes("#")) return false;
@@ -581,10 +598,10 @@ function logHtmlDiagnostics(html: string) {
 
   const productUrlMatches = [
     ...(normalizedHtml.match(
-      /https?:\/\/www\.game\.es\/[A-Z0-9\-\/]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/\d+/gi
+      /https?:\/\/www\.game\.es\/[a-z0-9ñáéíóúü\-\/]+\/\d+/gi
     ) ?? []),
     ...(normalizedHtml.match(
-      /\/[A-Z0-9\-\/]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/[A-Z0-9\-]+\/\d+/gi
+      /\/[a-z0-9ñáéíóúü\-\/]+\/\d+/gi
     ) ?? [])
   ];
 
