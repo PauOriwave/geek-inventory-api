@@ -524,74 +524,304 @@ function extractBrickEconomyMarketValue(
   html: string
 ): number | null {
   const bodyText = $("body").text().replace(/\s+/g, " ").trim();
+  const normalizedBody = normalizeText(bodyText);
 
-  const labelledPatterns = [
-    /Market\s+Value\s*[:\-]?\s*[€$£]?\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /Current\s+Value\s*[:\-]?\s*[€$£]?\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /Value\s*[:\-]?\s*[€$£]?\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /Valor\s+de\s+mercado\s*[:\-]?\s*[€$£]?\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /Valor\s+actual\s*[:\-]?\s*[€$£]?\s*(\d{1,6}(?:[.,]\d{1,2})?)/i
-  ];
+  console.log("🧱 BE price page hints:", {
+    hasValue: normalizedBody.includes("value"),
+    hasRetail: normalizedBody.includes("retail"),
+    hasNewSealed: normalizedBody.includes("new") && normalizedBody.includes("sealed"),
+    hasGrowth: normalizedBody.includes("growth"),
+    currencySamples: extractCurrencySamples(bodyText).slice(0, 20)
+  });
 
-  for (const pattern of labelledPatterns) {
-    const match = bodyText.match(pattern);
-    const parsed = parsePrice(match?.[1]);
+  const valuePrice =
+    extractPriceAfterLabel(bodyText, [
+      "Market Value",
+      "Current Value",
+      "Value"
+    ]) ?? extractPriceNearLabelFromDom($, [
+      "Market Value",
+      "Current Value",
+      "Value"
+    ]);
 
-    if (parsed && parsed > 0) return parsed;
+  if (valuePrice && isUsableLegoPrice(valuePrice)) {
+    console.log("🧱 BE price chosen:", {
+      kind: "value",
+      price: valuePrice
+    });
+
+    return valuePrice;
   }
 
-  const selectors = [
-    "[itemprop='price']",
-    ".price",
-    ".value",
-    ".set-value",
-    ".market-value",
-    ".current-value"
-  ];
+  const newSealedPrice = extractNewSealedPrice(bodyText);
 
-  for (const selector of selectors) {
-    const parsed =
-      parsePrice($(selector).first().attr("content")) ??
-      parsePrice($(selector).first().text());
+  if (newSealedPrice && isUsableLegoPrice(newSealedPrice)) {
+    console.log("🧱 BE price chosen:", {
+      kind: "new_sealed",
+      price: newSealedPrice
+    });
 
-    if (parsed && parsed > 0) return parsed;
+    return newSealedPrice;
+  }
+
+  const retailPrice =
+    extractPriceAfterLabel(bodyText, [
+      "Retail Price",
+      "Retail",
+      "RRP",
+      "MSRP"
+    ]) ?? extractPriceNearLabelFromDom($, [
+      "Retail Price",
+      "Retail",
+      "RRP",
+      "MSRP"
+    ]);
+
+  if (retailPrice && isUsableLegoPrice(retailPrice)) {
+    console.log("🧱 BE price chosen:", {
+      kind: "retail",
+      price: retailPrice
+    });
+
+    return retailPrice;
+  }
+
+  const usedPrice = extractPriceAfterLabel(bodyText, [
+    "Used Value",
+    "Used Price",
+    "Used"
+  ]);
+
+  if (usedPrice && isUsableLegoPrice(usedPrice)) {
+    console.log("🧱 BE price chosen:", {
+      kind: "used_fallback",
+      price: usedPrice
+    });
+
+    return usedPrice;
   }
 
   const jsonPrice = extractPriceFromJson(html);
-  if (jsonPrice && jsonPrice > 0) return jsonPrice;
 
-  const currencyMatches = [
-    ...bodyText.matchAll(/[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/g)
-  ];
+  if (jsonPrice && isUsableLegoPrice(jsonPrice)) {
+    console.log("🧱 BE price chosen:", {
+      kind: "json_fallback",
+      price: jsonPrice
+    });
 
-  const prices = currencyMatches
-    .map((match) => parsePrice(match[1]))
-    .filter((price): price is number => Boolean(price && price > 0))
-    .filter((price) => price < 10000);
+    return jsonPrice;
+  }
 
-  return prices[0] ?? null;
+  return null;
 }
 
-function extractPriceFromJson(html: string): number | null {
-  const patterns = [
-    /"price"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /"lowPrice"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /"highPrice"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /"value"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi
-  ];
+function extractPriceAfterLabel(
+  text: string,
+  labels: string[]
+): number | null {
+  for (const label of labels) {
+    const escapedLabel = escapeRegExp(label);
 
-  const prices: number[] = [];
+    const patterns = [
+      new RegExp(
+        `\\b${escapedLabel}\\b\\s*[:\\-]?\\s*[€$£]\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)`,
+        "i"
+      ),
+      new RegExp(
+        `\\b${escapedLabel}\\b\\s*[:\\-]?\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)\\s*[€$£]`,
+        "i"
+      ),
+      new RegExp(
+        `\\b${escapedLabel}\\b.{0,80}?[€$£]\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)`,
+        "i"
+      ),
+      new RegExp(
+        `\\b${escapedLabel}\\b.{0,80}?(\\d{1,6}(?:[.,]\\d{1,2})?)\\s*[€$£]`,
+        "i"
+      )
+    ];
 
-  for (const pattern of patterns) {
-    for (const match of html.matchAll(pattern)) {
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (!match) continue;
+
+      const context = getMatchContext(text, match.index ?? 0, 120);
+
+      if (isBadPriceContext(context)) {
+        continue;
+      }
+
       const parsed = parsePrice(match[1]);
-      if (parsed && parsed > 0 && parsed < 10000) {
-        prices.push(parsed);
+
+      if (parsed && isUsableLegoPrice(parsed)) {
+        return parsed;
       }
     }
   }
 
-  return prices[0] ?? null;
+  return null;
+}
+
+function extractPriceNearLabelFromDom(
+  $: cheerio.CheerioAPI,
+  labels: string[]
+): number | null {
+  const labelMatchers = labels.map((label) => normalizeText(label));
+
+  const candidates: number[] = [];
+
+  $("body *").each((_, el) => {
+    const node = $(el);
+    const text = node.text().replace(/\s+/g, " ").trim();
+
+    if (!text || text.length > 500) return;
+
+    const normalized = normalizeText(text);
+    const hasLabel = labelMatchers.some((label) => normalized.includes(label));
+
+    if (!hasLabel) return;
+    if (isBadPriceContext(text)) return;
+
+    const price = extractFirstCurrencyPrice(text);
+
+    if (price && isUsableLegoPrice(price)) {
+      candidates.push(price);
+    }
+  });
+
+  return candidates[0] ?? null;
+}
+
+function extractNewSealedPrice(text: string): number | null {
+  const rangePatterns = [
+    /new\s+and\s+sealed[^.]{0,180}?between\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)\s+and\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
+    /new\s+\/\s+sealed[^.]{0,180}?between\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)\s+and\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
+    /sealed[^.]{0,180}?between\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)\s+and\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i
+  ];
+
+  for (const pattern of rangePatterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+
+    const context = getMatchContext(text, match.index ?? 0, 220);
+
+    if (isBadPriceContext(context)) {
+      continue;
+    }
+
+    const min = parsePrice(match[1]);
+    const max = parsePrice(match[2]);
+
+    if (
+      min &&
+      max &&
+      isUsableLegoPrice(min) &&
+      isUsableLegoPrice(max)
+    ) {
+      return Number(((min + max) / 2).toFixed(2));
+    }
+  }
+
+  const singlePatterns = [
+    /new\s+and\s+sealed[^.]{0,120}?[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
+    /new\s+\/\s+sealed[^.]{0,120}?[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
+    /sealed[^.]{0,120}?[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i
+  ];
+
+  for (const pattern of singlePatterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+
+    const context = getMatchContext(text, match.index ?? 0, 180);
+
+    if (isBadPriceContext(context)) {
+      continue;
+    }
+
+    const parsed = parsePrice(match[1]);
+
+    if (parsed && isUsableLegoPrice(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function extractPriceFromJson(html: string): number | null {
+  const preferredPatterns = [
+    /"marketValue"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
+    /"currentValue"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
+    /"setValue"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
+    /"retailPrice"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
+    /"msrp"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi
+  ];
+
+  for (const pattern of preferredPatterns) {
+    for (const match of html.matchAll(pattern)) {
+      const parsed = parsePrice(match[1]);
+
+      if (parsed && isUsableLegoPrice(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractCurrencySamples(text: string): string[] {
+  return [...text.matchAll(/[€$£]\s*\d{1,6}(?:[.,]\d{1,2})?/g)]
+    .map((match) => match[0])
+    .slice(0, 50);
+}
+
+function extractFirstCurrencyPrice(text: string): number | null {
+  const match = text.match(/[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/);
+
+  if (!match) {
+    const reverseMatch = text.match(/(\d{1,6}(?:[.,]\d{1,2})?)\s*[€$£]/);
+    return parsePrice(reverseMatch?.[1]);
+  }
+
+  return parsePrice(match[1]);
+}
+
+function getMatchContext(text: string, index: number, size: number): string {
+  return text.slice(Math.max(0, index - size), index + size);
+}
+
+function isBadPriceContext(value: string): boolean {
+  const normalized = normalizeText(value);
+
+  const badTokens = [
+    "growth",
+    "annual growth",
+    "yearly growth",
+    "roi",
+    "return",
+    "change",
+    "trend",
+    "forecast",
+    "prediction",
+    "predicted",
+    "increase",
+    "decrease",
+    "percent",
+    "percentage",
+    "pieces",
+    "minifig",
+    "minifigure",
+    "shipping",
+    "delivery"
+  ];
+
+  return badTokens.some((token) => normalized.includes(token));
+}
+
+function isUsableLegoPrice(value: number): boolean {
+  return Number.isFinite(value) && value >= 8 && value <= 10000;
 }
 
 function computeConfidence(input: {
@@ -766,6 +996,10 @@ function decodeHtml(value: string): string {
     .replace(/&#039;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function absolutizeBrickEconomy(href: string): string {
