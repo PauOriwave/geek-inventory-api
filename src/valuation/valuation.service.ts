@@ -5,6 +5,7 @@ import { getWorldViceousPrice } from "./sources/world-viceous.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getDungeonMarvelsPrice } from "./sources/dungeon-marvels.source";
+import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
@@ -72,6 +73,12 @@ const sources: SourceDefinition[] = [
     priority: 86,
     categories: ["boardgame", "comic", "tcg", "figure", "lego"],
     handler: getDungeonMarvelsPrice
+  },
+  {
+    name: "brickeconomy",
+    priority: 92,
+    categories: ["lego"],
+    handler: getBrickEconomyPrice
   }
 ];
 
@@ -126,8 +133,27 @@ async function scrapeValuation(item: Item): Promise<{
   const defaultQuery = buildSourceQuery(item);
   const activeSources = getSourcesForItem(item);
 
-  console.log("[valuation] item category:", item.category);
-  console.log("[valuation] sources enabled:", activeSources.map((source) => source.name));
+  console.log("[valuation] item:", {
+    id: item.id,
+    name: item.name,
+    category: item.category,
+    platform: item.platform,
+    region: item.region
+  });
+
+  console.log(
+    "[valuation] sources enabled:",
+    activeSources.map((source) => source.name)
+  );
+
+  console.log(
+    "[valuation] active source handlers:",
+    activeSources.map((source) => ({
+      name: source.name,
+      category: item.category,
+      hasHandler: typeof source.handler === "function"
+    }))
+  );
 
   if (activeSources.length === 0) {
     return {
@@ -138,7 +164,18 @@ async function scrapeValuation(item: Item): Promise<{
 
   const settled = await Promise.allSettled(
     activeSources.map(async (source) => {
+      console.log("[valuation] running source:", source.name);
+
       const result = await source.handler(item);
+
+      console.log("[valuation] source finished:", {
+        source: source.name,
+        hasResult: Boolean(result),
+        price: result?.price,
+        confidence: result?.confidence,
+        matchedTitle: result?.matchedTitle
+      });
+
       return {
         source,
         result
@@ -189,6 +226,14 @@ async function scrapeValuation(item: Item): Promise<{
       valid.push(result);
       continue;
     }
+
+    console.log("[valuation] source error:", {
+      source: sourceName,
+      error:
+        entry.reason instanceof Error
+          ? entry.reason.message
+          : String(entry.reason)
+    });
 
     attempts.push({
       source: sourceName,

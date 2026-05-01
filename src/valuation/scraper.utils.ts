@@ -16,6 +16,10 @@ export function enrichScore(
   let score = baseScore;
 
   const normTitle = normalizeText(title);
+  const normName = normalizeText(item.name);
+
+  if (normTitle.includes(normName)) score += 0.15;
+  if (normName.includes(normTitle)) score += 0.08;
 
   if (item.platform) {
     const p = normalizeText(item.platform);
@@ -27,7 +31,15 @@ export function enrichScore(
     if (normTitle.includes(r)) score += 0.05;
   }
 
-  return score;
+  const itemSetNumber = extractLikelySetNumber(item.name);
+  const titleSetNumber = extractLikelySetNumber(title);
+
+  if (item.category === "lego" && itemSetNumber && titleSetNumber) {
+    if (itemSetNumber === titleSetNumber) score += 0.5;
+    else score -= 0.35;
+  }
+
+  return Math.max(0, score);
 }
 
 export function computeConfidenceFromScore(score: number) {
@@ -54,4 +66,9 @@ export function pickBestBySimilarity<T extends { title: string }>(
   if (!best || best.score < minScore) return null;
 
   return best.c;
+}
+
+function extractLikelySetNumber(value: string): string | null {
+  const match = String(value || "").match(/\b(\d{4,7})\b/);
+  return match?.[1] ?? null;
 }
