@@ -63,6 +63,7 @@ model Item {
 
   snapshots           ItemValuationSnapshot[]
   scraperRuns         ScraperRunLog[]
+  sourceMarketData    SourceMarketData[]
 }
 
 model ItemValuationSnapshot {
@@ -126,4 +127,19 @@ model ScraperRunLog {
   @@index([itemId, createdAt])
   @@index([source, createdAt])
   @@index([status, createdAt])
+}
+
+model SourceMarketData {
+  id         String   @id @default(uuid())
+  itemId     String
+  item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  source     String
+  sourceUrl  String?
+  rawData    Json
+
+  createdAt  DateTime @default(now())
+
+  @@index([itemId, createdAt])
+  @@index([source, createdAt])
 }

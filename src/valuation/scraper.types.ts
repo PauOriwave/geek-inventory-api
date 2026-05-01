@@ -5,6 +5,7 @@ export type ScraperSourceResult = {
   matchedTitle?: string;
   matchedUrl?: string;
   query?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type ScraperAttemptLog = {

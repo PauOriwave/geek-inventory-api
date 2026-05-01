@@ -11,10 +11,25 @@ type SetCandidate = {
   source: "direct" | "known_alias" | "brickeconomy" | "bricklink";
 };
 
+type BrickEconomyMetrics = {
+  setNumber: string;
+  currency: "EUR" | "USD" | "GBP" | null;
+  marketValue: number | null;
+  retailPrice: number | null;
+  newSealedValue: number | null;
+  newSealedMin: number | null;
+  newSealedMax: number | null;
+  usedValue: number | null;
+  usedMin: number | null;
+  usedMax: number | null;
+  priceBasis: string;
+};
+
 type BrickEconomyDetail = {
   title: string;
   price: number;
   url: string;
+  metrics: BrickEconomyMetrics;
 };
 
 const BRICKLINK_BASE_URL = "https://www.bricklink.com";
@@ -56,7 +71,7 @@ export async function getBrickEconomyPrice(
   for (const url of urls) {
     console.log("🧱 BE Detail:", url);
 
-    const detail = await fetchBrickEconomyDetail(url);
+    const detail = await fetchBrickEconomyDetail(url, setMatch.setNumber);
 
     if (!detail) continue;
 
@@ -71,7 +86,8 @@ export async function getBrickEconomyPrice(
       title: detail.title,
       price: detail.price,
       confidence,
-      url: detail.url
+      url: detail.url,
+      metrics: detail.metrics
     });
 
     return {
@@ -80,7 +96,13 @@ export async function getBrickEconomyPrice(
       confidence,
       matchedTitle: detail.title,
       matchedUrl: detail.url,
-      query
+      query,
+      metadata: {
+        ...detail.metrics,
+        resolverSource: setMatch.source,
+        resolverScore: setMatch.score,
+        brickEconomyUrl: detail.url
+      }
     };
   }
 
@@ -207,49 +229,17 @@ function buildBrickEconomyThemeUrls(value: string): string[] {
     urls.push(`${BRICKECONOMY_BASE_URL}/sets/year/2013/theme/the-lone-ranger`);
   }
 
-  if (normalized.includes("star wars")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/star-wars`);
-  }
-
-  if (normalized.includes("indiana jones")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/indiana-jones`);
-  }
-
-  if (normalized.includes("harry potter")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/harry-potter`);
-  }
-
-  if (normalized.includes("technic")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/technic`);
-  }
-
-  if (normalized.includes("ideas")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/ideas`);
-  }
-
-  if (normalized.includes("architecture")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/architecture`);
-  }
-
-  if (normalized.includes("city")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/city`);
-  }
-
-  if (normalized.includes("ninjago")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/ninjago`);
-  }
-
-  if (normalized.includes("friends")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/friends`);
-  }
-
-  if (normalized.includes("classic")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/classic`);
-  }
-
-  if (normalized.includes("creator")) {
-    urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/creator`);
-  }
+  if (normalized.includes("star wars")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/star-wars`);
+  if (normalized.includes("indiana jones")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/indiana-jones`);
+  if (normalized.includes("harry potter")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/harry-potter`);
+  if (normalized.includes("technic")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/technic`);
+  if (normalized.includes("ideas")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/ideas`);
+  if (normalized.includes("architecture")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/architecture`);
+  if (normalized.includes("city")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/city`);
+  if (normalized.includes("ninjago")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/ninjago`);
+  if (normalized.includes("friends")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/friends`);
+  if (normalized.includes("classic")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/classic`);
+  if (normalized.includes("creator")) urls.push(`${BRICKECONOMY_BASE_URL}/sets/theme/creator`);
 
   return [...new Set(urls)];
 }
@@ -436,7 +426,8 @@ function buildBrickEconomyUrls(setMatch: SetCandidate): string[] {
 }
 
 async function fetchBrickEconomyDetail(
-  url: string
+  url: string,
+  setNumber: string
 ): Promise<BrickEconomyDetail | null> {
   const html = await fetchHtml(url, BRICKECONOMY_BASE_URL);
   if (!html) return null;
@@ -444,22 +435,23 @@ async function fetchBrickEconomyDetail(
   const $ = cheerio.load(html);
 
   const title = extractBrickEconomyTitle($, url);
-  const price = extractBrickEconomyMarketValue($, html);
+  const metrics = extractBrickEconomyMetrics($, html, setNumber, url);
 
   console.log("🧱 BE detail parsed:", {
     url,
     title,
-    price
+    metrics
   });
 
-  if (!price || price <= 0) {
+  if (!metrics.marketValue && !metrics.retailPrice && !metrics.newSealedValue && !metrics.usedValue) {
     return null;
   }
 
   return {
     title,
-    price,
-    url
+    price: selectPrimaryPrice(metrics),
+    url,
+    metrics
   };
 }
 
@@ -519,101 +511,107 @@ function extractBrickEconomyTitle(
   );
 }
 
-function extractBrickEconomyMarketValue(
+function extractBrickEconomyMetrics(
   $: cheerio.CheerioAPI,
-  html: string
-): number | null {
+  html: string,
+  setNumber: string,
+  url: string
+): BrickEconomyMetrics {
   const bodyText = $("body").text().replace(/\s+/g, " ").trim();
   const normalizedBody = normalizeText(bodyText);
+  const currency = detectCurrency(bodyText);
 
   console.log("🧱 BE price page hints:", {
     hasValue: normalizedBody.includes("value"),
     hasRetail: normalizedBody.includes("retail"),
     hasNewSealed: normalizedBody.includes("new") && normalizedBody.includes("sealed"),
+    hasUsed: normalizedBody.includes("used"),
     hasGrowth: normalizedBody.includes("growth"),
     currencySamples: extractCurrencySamples(bodyText).slice(0, 20)
   });
 
-  const valuePrice =
-    extractPriceAfterLabel(bodyText, [
-      "Market Value",
-      "Current Value",
-      "Value"
-    ]) ?? extractPriceNearLabelFromDom($, [
-      "Market Value",
-      "Current Value",
-      "Value"
-    ]);
-
-  if (valuePrice && isUsableLegoPrice(valuePrice)) {
-    console.log("🧱 BE price chosen:", {
-      kind: "value",
-      price: valuePrice
-    });
-
-    return valuePrice;
-  }
-
-  const newSealedPrice = extractNewSealedPrice(bodyText);
-
-  if (newSealedPrice && isUsableLegoPrice(newSealedPrice)) {
-    console.log("🧱 BE price chosen:", {
-      kind: "new_sealed",
-      price: newSealedPrice
-    });
-
-    return newSealedPrice;
-  }
+  const marketValue =
+    extractPriceAfterLabel(bodyText, ["Market Value", "Current Value", "Value"]) ??
+    extractPriceNearLabelFromDom($, ["Market Value", "Current Value", "Value"]);
 
   const retailPrice =
-    extractPriceAfterLabel(bodyText, [
-      "Retail Price",
-      "Retail",
-      "RRP",
-      "MSRP"
-    ]) ?? extractPriceNearLabelFromDom($, [
-      "Retail Price",
-      "Retail",
-      "RRP",
-      "MSRP"
-    ]);
+    extractPriceAfterLabel(bodyText, ["Retail Price", "Retail", "RRP", "MSRP"]) ??
+    extractPriceNearLabelFromDom($, ["Retail Price", "Retail", "RRP", "MSRP"]);
 
-  if (retailPrice && isUsableLegoPrice(retailPrice)) {
-    console.log("🧱 BE price chosen:", {
-      kind: "retail",
-      price: retailPrice
-    });
+  const newSealedRange = extractRangeAfterLabel(bodyText, [
+    "New and Sealed",
+    "New/Sealed",
+    "Sealed"
+  ]);
 
-    return retailPrice;
-  }
+  const newSealedSingle = extractPriceAfterLabel(bodyText, [
+    "New and Sealed",
+    "New/Sealed",
+    "Sealed"
+  ]);
 
-  const usedPrice = extractPriceAfterLabel(bodyText, [
+  const usedRange = extractRangeAfterLabel(bodyText, [
     "Used Value",
     "Used Price",
     "Used"
   ]);
 
-  if (usedPrice && isUsableLegoPrice(usedPrice)) {
-    console.log("🧱 BE price chosen:", {
-      kind: "used_fallback",
-      price: usedPrice
-    });
+  const usedSingle = extractPriceAfterLabel(bodyText, [
+    "Used Value",
+    "Used Price",
+    "Used"
+  ]);
 
-    return usedPrice;
-  }
+  const jsonMetrics = extractMetricsFromJson(html);
 
-  const jsonPrice = extractPriceFromJson(html);
+  const metrics: BrickEconomyMetrics = {
+    setNumber,
+    currency,
+    marketValue: marketValue ?? jsonMetrics.marketValue ?? null,
+    retailPrice: retailPrice ?? jsonMetrics.retailPrice ?? null,
+    newSealedValue:
+      newSealedSingle ??
+      averageRange(newSealedRange.min, newSealedRange.max) ??
+      jsonMetrics.newSealedValue ??
+      null,
+    newSealedMin: newSealedRange.min ?? jsonMetrics.newSealedMin ?? null,
+    newSealedMax: newSealedRange.max ?? jsonMetrics.newSealedMax ?? null,
+    usedValue:
+      usedSingle ??
+      averageRange(usedRange.min, usedRange.max) ??
+      jsonMetrics.usedValue ??
+      null,
+    usedMin: usedRange.min ?? jsonMetrics.usedMin ?? null,
+    usedMax: usedRange.max ?? jsonMetrics.usedMax ?? null,
+    priceBasis: "unknown"
+  };
 
-  if (jsonPrice && isUsableLegoPrice(jsonPrice)) {
-    console.log("🧱 BE price chosen:", {
-      kind: "json_fallback",
-      price: jsonPrice
-    });
+  metrics.priceBasis = selectPriceBasis(metrics);
 
-    return jsonPrice;
-  }
+  console.log("🧱 BE metrics extracted:", {
+    url,
+    metrics
+  });
 
-  return null;
+  return metrics;
+}
+
+function selectPrimaryPrice(metrics: BrickEconomyMetrics): number {
+  return (
+    metrics.marketValue ??
+    metrics.newSealedValue ??
+    metrics.retailPrice ??
+    metrics.usedValue ??
+    0
+  );
+}
+
+function selectPriceBasis(metrics: BrickEconomyMetrics): string {
+  if (metrics.marketValue) return "marketValue";
+  if (metrics.newSealedValue) return "newSealedValue";
+  if (metrics.retailPrice) return "retailPrice";
+  if (metrics.usedValue) return "usedValue";
+  return "unknown";
 }
 
 function extractPriceAfterLabel(
@@ -648,19 +646,53 @@ function extractPriceAfterLabel(
 
       const context = getMatchContext(text, match.index ?? 0, 120);
 
-      if (isBadPriceContext(context)) {
-        continue;
-      }
+      if (isBadPriceContext(context)) continue;
 
       const parsed = parsePrice(match[1]);
 
-      if (parsed && isUsableLegoPrice(parsed)) {
-        return parsed;
-      }
+      if (parsed && isUsableLegoPrice(parsed)) return parsed;
     }
   }
 
   return null;
+}
+
+function extractRangeAfterLabel(
+  text: string,
+  labels: string[]
+): { min: number | null; max: number | null } {
+  for (const label of labels) {
+    const escapedLabel = escapeRegExp(label);
+
+    const patterns = [
+      new RegExp(
+        `\\b${escapedLabel}\\b[^.]{0,220}?between\\s*[€$£]\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)\\s+and\\s*[€$£]\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)`,
+        "i"
+      ),
+      new RegExp(
+        `\\b${escapedLabel}\\b[^.]{0,220}?[€$£]\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)\\s*(?:-|to|and)\\s*[€$£]\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)`,
+        "i"
+      )
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (!match) continue;
+
+      const context = getMatchContext(text, match.index ?? 0, 260);
+
+      if (isBadPriceContext(context)) continue;
+
+      const min = parsePrice(match[1]);
+      const max = parsePrice(match[2]);
+
+      if (min && max && isUsableLegoPrice(min) && isUsableLegoPrice(max)) {
+        return { min, max };
+      }
+    }
+  }
+
+  return { min: null, max: null };
 }
 
 function extractPriceNearLabelFromDom(
@@ -693,72 +725,52 @@ function extractPriceNearLabelFromDom(
   return candidates[0] ?? null;
 }
 
-function extractNewSealedPrice(text: string): number | null {
-  const rangePatterns = [
-    /new\s+and\s+sealed[^.]{0,180}?between\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)\s+and\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /new\s+\/\s+sealed[^.]{0,180}?between\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)\s+and\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /sealed[^.]{0,180}?between\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)\s+and\s*[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i
-  ];
-
-  for (const pattern of rangePatterns) {
-    const match = text.match(pattern);
-    if (!match) continue;
-
-    const context = getMatchContext(text, match.index ?? 0, 220);
-
-    if (isBadPriceContext(context)) {
-      continue;
-    }
-
-    const min = parsePrice(match[1]);
-    const max = parsePrice(match[2]);
-
-    if (
-      min &&
-      max &&
-      isUsableLegoPrice(min) &&
-      isUsableLegoPrice(max)
-    ) {
-      return Number(((min + max) / 2).toFixed(2));
-    }
-  }
-
-  const singlePatterns = [
-    /new\s+and\s+sealed[^.]{0,120}?[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /new\s+\/\s+sealed[^.]{0,120}?[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i,
-    /sealed[^.]{0,120}?[€$£]\s*(\d{1,6}(?:[.,]\d{1,2})?)/i
-  ];
-
-  for (const pattern of singlePatterns) {
-    const match = text.match(pattern);
-    if (!match) continue;
-
-    const context = getMatchContext(text, match.index ?? 0, 180);
-
-    if (isBadPriceContext(context)) {
-      continue;
-    }
-
-    const parsed = parsePrice(match[1]);
-
-    if (parsed && isUsableLegoPrice(parsed)) {
-      return parsed;
-    }
-  }
-
-  return null;
+function extractMetricsFromJson(html: string): Partial<BrickEconomyMetrics> {
+  return {
+    marketValue: extractJsonPrice(html, [
+      "marketValue",
+      "currentValue",
+      "setValue"
+    ]),
+    retailPrice: extractJsonPrice(html, [
+      "retailPrice",
+      "msrp"
+    ]),
+    newSealedValue: extractJsonPrice(html, [
+      "newSealedValue",
+      "sealedValue",
+      "newValue"
+    ]),
+    newSealedMin: extractJsonPrice(html, [
+      "newSealedMin",
+      "sealedMin",
+      "newMin"
+    ]),
+    newSealedMax: extractJsonPrice(html, [
+      "newSealedMax",
+      "sealedMax",
+      "newMax"
+    ]),
+    usedValue: extractJsonPrice(html, [
+      "usedValue",
+      "usedPrice"
+    ]),
+    usedMin: extractJsonPrice(html, [
+      "usedMin"
+    ]),
+    usedMax: extractJsonPrice(html, [
+      "usedMax"
+    ])
+  };
 }
 
-function extractPriceFromJson(html: string): number | null {
-  const preferredPatterns = [
-    /"marketValue"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /"currentValue"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /"setValue"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /"retailPrice"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /"msrp"\s*:\s*"?(\d{1,6}(?:[.,]\d{1,2})?)"?/gi
-  ];
+function extractJsonPrice(html: string, keys: string[]): number | null {
+  for (const key of keys) {
+    const pattern = new RegExp(
+      `"${escapeRegExp(key)}"\\s*:\\s*"?(${String.raw`\d{1,6}(?:[.,]\d{1,2})?`})"?`,
+      "gi"
+    );
 
-  for (const pattern of preferredPatterns) {
     for (const match of html.matchAll(pattern)) {
       const parsed = parsePrice(match[1]);
 
@@ -769,6 +781,21 @@ function extractPriceFromJson(html: string): number | null {
   }
 
   return null;
+}
+
+function detectCurrency(text: string): "EUR" | "USD" | "GBP" | null {
+  if (text.includes("€")) return "EUR";
+  if (text.includes("$")) return "USD";
+  if (text.includes("£")) return "GBP";
+  return null;
+}
+
+function averageRange(
+  min: number | null,
+  max: number | null
+): number | null {
+  if (!min || !max) return null;
+  return Number(((min + max) / 2).toFixed(2));
 }
 
 function extractCurrencySamples(text: string): string[] {
