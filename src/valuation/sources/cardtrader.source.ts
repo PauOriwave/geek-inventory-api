@@ -68,6 +68,13 @@ const RARITY_SLUGS = [
   "uncommon"
 ];
 
+const TRUSTED_PRICE_LABELS = [
+  "Best Deal",
+  "CT Min Price",
+  "CT Market Price",
+  "US Market Price"
+];
+
 export async function getCardTraderPrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
@@ -115,9 +122,21 @@ export async function getCardTraderPrice(
       price: detail.price,
       priceBasis: detail.priceBasis,
       currency: detail.currency,
+      rawPriceText: detail.rawPriceText,
       confidence,
       url: detail.url
     });
+
+    if (!isDetailCompatible(parsed, candidate, detail)) {
+      console.log("🟧 CT incompatible detail skipped:", {
+        parsed,
+        candidate,
+        detailTitle: detail.title,
+        url: detail.url
+      });
+
+      continue;
+    }
 
     if (!detail.price || detail.price <= 0) {
       return {
@@ -257,7 +276,6 @@ function buildCardTraderCandidates(
 
 function buildRaritySlugs(rarity?: string): string[] {
   const slugs = new Set<string>();
-
   const normalized = normalizeText(rarity || "");
 
   if (normalized.includes("special") && normalized.includes("illustration")) {
@@ -303,15 +321,8 @@ function parseCardTraderDetail(
 
   if (!title) return null;
 
-  const price =
-    extractPriceAfterLabel(bodyText, [
-      "CT Min Price",
-      "CT Market Price",
-      "Best Deal",
-      "US Market Price"
-    ]) ?? extractFirstUsableCurrencyPrice(bodyText);
-
-  const rawPriceText = extractRawPriceText(bodyText);
+  const price = extractTrustedPrice(bodyText);
+  const rawPriceText = extractRawTrustedPriceText(bodyText);
 
   return {
     title,
@@ -323,99 +334,88 @@ function parseCardTraderDetail(
   };
 }
 
-function extractPriceAfterLabel(
-  text: string,
-  labels: string[]
-): { price: number; basis: string; currency: "EUR" | "USD" | "GBP" } | null {
-  for (const label of labels) {
-    const escaped = escapeRegExp(label);
-
-    const patterns = [
-      new RegExp(
-        `${escaped}\\s*[:\\-]?\\s*([€$£])\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)`,
-        "i"
-      ),
-      new RegExp(
-        `${escaped}.{0,80}?([€$£])\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)`,
-        "i"
-      ),
-      new RegExp(
-        `${escaped}\\s*[:\\-]?\\s*(\\d{1,6}(?:[.,]\\d{1,2})?)\\s*([€$£])`,
-        "i"
-      ),
-      new RegExp(
-        `${escaped}.{0,80}?(\\d{1,6}(?:[.,]\\d{1,2})?)\\s*([€$£])`,
-        "i"
-      )
-    ];
-
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (!match) continue;
-
-      const hasLeadingCurrency = ["€", "$", "£"].includes(match[1] ?? "");
-
-      const currencySymbol = hasLeadingCurrency ? match[1] : match[2];
-      const priceText = hasLeadingCurrency ? match[2] : match[1];
-
-      const parsed = parseCardPrice(priceText);
-      const currency = parseCurrency(currencySymbol);
-
-      if (parsed && parsed > 0 && currency) {
-        return {
-          price: parsed,
-          basis: label,
-          currency
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-function extractFirstUsableCurrencyPrice(
+function extractTrustedPrice(
   text: string
 ): { price: number; basis: string; currency: "EUR" | "USD" | "GBP" } | null {
-  const matches = [
-    ...text.matchAll(/([€$£])\s*(\d{1,6}(?:[.,]\d{1,2})?)/g)
-  ];
+  for (const label of TRUSTED_PRICE_LABELS) {
+    const segment = extractSegmentAfterLabel(text, label, 100);
 
-  for (const match of matches) {
-    const currency = parseCurrency(match[1]);
-    const price = parseCardPrice(match[2]);
+    if (!segment) continue;
 
-    if (!currency || !price || price <= 0) continue;
-    if (price > 100000) continue;
+    if (segment.includes("—") || segment.includes("-Add") || segment.includes("–")) {
+      const currencyInSegment = segment.match(/[€$£]\s*\d{1,6}(?:[.,]\d{1,2})?/);
+      if (!currencyInSegment) continue;
+    }
 
-    const index = match.index ?? 0;
-    const context = text.slice(Math.max(0, index - 80), index + 120);
+    const parsed = extractFirstPriceFromSegment(segment);
 
-    if (isBadPriceContext(context)) continue;
+    if (!parsed) continue;
 
     return {
-      price,
-      basis: "currency_fallback",
-      currency
+      ...parsed,
+      basis: label
     };
   }
 
   return null;
 }
 
-function extractRawPriceText(text: string): string | null {
-  const labels = ["CT Min Price", "CT Market Price", "Best Deal", "US Market Price"];
+function extractFirstPriceFromSegment(
+  segment: string
+): { price: number; currency: "EUR" | "USD" | "GBP" } | null {
+  const leading = segment.match(/([€$£])\s*(\d{1,6}(?:[.,]\d{1,2})?)/);
 
-  for (const label of labels) {
-    const index = text.toLowerCase().indexOf(label.toLowerCase());
+  if (leading) {
+    const currency = parseCurrency(leading[1]);
+    const price = parseCardPrice(leading[2]);
 
-    if (index === -1) continue;
-
-    return text.slice(index, index + 120).trim();
+    if (currency && price && price > 0) {
+      return {
+        price,
+        currency
+      };
+    }
   }
 
-  const currencyMatch = text.match(/[€$£]\s*\d{1,6}(?:[.,]\d{1,2})?/);
-  return currencyMatch?.[0] ?? null;
+  const trailing = segment.match(/(\d{1,6}(?:[.,]\d{1,2})?)\s*([€$£])/);
+
+  if (trailing) {
+    const price = parseCardPrice(trailing[1]);
+    const currency = parseCurrency(trailing[2]);
+
+    if (currency && price && price > 0) {
+      return {
+        price,
+        currency
+      };
+    }
+  }
+
+  return null;
+}
+
+function extractSegmentAfterLabel(
+  text: string,
+  label: string,
+  size: number
+): string | null {
+  const index = text.toLowerCase().indexOf(label.toLowerCase());
+
+  if (index === -1) return null;
+
+  return text.slice(index, index + size).trim();
+}
+
+function extractRawTrustedPriceText(text: string): string | null {
+  for (const label of TRUSTED_PRICE_LABELS) {
+    const segment = extractSegmentAfterLabel(text, label, 120);
+
+    if (!segment) continue;
+
+    return segment;
+  }
+
+  return null;
 }
 
 async function fetchHtml(url: string): Promise<string | null> {
@@ -612,6 +612,36 @@ function computeConfidence(
   return Math.max(0.45, Math.min(0.93, Number(confidence.toFixed(2))));
 }
 
+function isDetailCompatible(
+  parsed: ParsedTcgQuery,
+  candidate: CardTraderCandidate,
+  detail: CardTraderDetail
+): boolean {
+  const normalizedTitle = normalizeText(detail.title);
+  const normalizedCandidateSet = normalizeText(candidate.setName || "");
+  const normalizedName = normalizeText(parsed.cleanName);
+
+  if (!normalizedTitle.includes(normalizedName)) return false;
+
+  if (
+    candidate.setName &&
+    normalizedCandidateSet &&
+    !normalizeText(detail.url).includes(normalizedCandidateSet.replace(/\s+/g, ""))
+  ) {
+    return true;
+  }
+
+  if (
+    parsed.cardNumber &&
+    candidate.cardNumber &&
+    normalizeCardNumber(candidate.cardNumber) !== parsed.cardNumber
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function addCandidate(
   candidates: CardTraderCandidate[],
   seen: Set<string>,
@@ -647,24 +677,6 @@ function parseCurrency(value?: string): "EUR" | "USD" | "GBP" | null {
   if (value === "$") return "USD";
   if (value === "£") return "GBP";
   return null;
-}
-
-function isBadPriceContext(value: string): boolean {
-  const normalized = normalizeText(value);
-
-  const badTokens = [
-    "shipping",
-    "shipment",
-    "condition",
-    "password",
-    "email",
-    "login",
-    "sign up",
-    "terms",
-    "privacy"
-  ];
-
-  return badTokens.some((token) => normalized.includes(token));
 }
 
 function normalizeSetCode(value: string): string {
@@ -717,8 +729,4 @@ function titleFromUrl(url: string): string {
   } catch {
     return "";
   }
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
