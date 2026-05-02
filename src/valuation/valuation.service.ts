@@ -1,4 +1,4 @@
-import { Item } from "@prisma/client";
+import { Item, Prisma } from "@prisma/client";
 import prisma from "../prisma/client";
 
 import { getWorldViceousPrice } from "./sources/world-viceous.source";
@@ -6,6 +6,7 @@ import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getDungeonMarvelsPrice } from "./sources/dungeon-marvels.source";
 import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
+import { getCardMarketPrice } from "./sources/cardmarket.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
@@ -79,6 +80,12 @@ const sources: SourceDefinition[] = [
     priority: 92,
     categories: ["lego"],
     handler: getBrickEconomyPrice
+  },
+  {
+    name: "cardmarket",
+    priority: 94,
+    categories: ["tcg"],
+    handler: getCardMarketPrice
   }
 ];
 
@@ -126,9 +133,46 @@ async function logScraperAttempts(
   });
 }
 
+function toPrismaJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(
+    JSON.stringify(value, (_, nestedValue) => {
+      if (nestedValue === undefined) return null;
+      return nestedValue;
+    })
+  ) as Prisma.InputJsonValue;
+}
+
+async function saveSourceMarketData(
+  item: Item,
+  results: ScraperSourceResult[]
+) {
+  const enrichedResults = results.filter(
+    (result) => result.metadata && Object.keys(result.metadata).length > 0
+  );
+
+  if (enrichedResults.length === 0) return;
+
+  await prisma.sourceMarketData.createMany({
+    data: enrichedResults.map((result) => ({
+      itemId: item.id,
+      source: result.source,
+      sourceUrl: result.matchedUrl ?? null,
+      rawData: toPrismaJson({
+        price: result.price,
+        confidence: result.confidence,
+        matchedTitle: result.matchedTitle ?? null,
+        matchedUrl: result.matchedUrl ?? null,
+        query: result.query ?? null,
+        metadata: result.metadata ?? {}
+      })
+    }))
+  });
+}
+
 async function scrapeValuation(item: Item): Promise<{
   valuation: ValuationResult | null;
   attempts: ScraperAttemptLog[];
+  validResults: ScraperSourceResult[];
 }> {
   const defaultQuery = buildSourceQuery(item);
   const activeSources = getSourcesForItem(item);
@@ -146,19 +190,11 @@ async function scrapeValuation(item: Item): Promise<{
     activeSources.map((source) => source.name)
   );
 
-  console.log(
-    "[valuation] active source handlers:",
-    activeSources.map((source) => ({
-      name: source.name,
-      category: item.category,
-      hasHandler: typeof source.handler === "function"
-    }))
-  );
-
   if (activeSources.length === 0) {
     return {
       valuation: null,
-      attempts: []
+      attempts: [],
+      validResults: []
     };
   }
 
@@ -227,14 +263,6 @@ async function scrapeValuation(item: Item): Promise<{
       continue;
     }
 
-    console.log("[valuation] source error:", {
-      source: sourceName,
-      error:
-        entry.reason instanceof Error
-          ? entry.reason.message
-          : String(entry.reason)
-    });
-
     attempts.push({
       source: sourceName,
       query: defaultQuery,
@@ -249,7 +277,8 @@ async function scrapeValuation(item: Item): Promise<{
   if (valid.length === 0) {
     return {
       valuation: null,
-      attempts
+      attempts,
+      validResults: []
     };
   }
 
@@ -265,7 +294,8 @@ async function scrapeValuation(item: Item): Promise<{
             Math.min(0.95, highConfidenceBest.confidence).toFixed(2)
           )
         },
-        attempts
+        attempts,
+        validResults: valid
       };
     }
   }
@@ -274,7 +304,8 @@ async function scrapeValuation(item: Item): Promise<{
 
   return {
     valuation: weighted,
-    attempts
+    attempts,
+    validResults: valid
   };
 }
 
@@ -370,10 +401,6 @@ function getSourcePriority(sourceName: string): number {
   return source?.priority ?? 50;
 }
 
-/**
- * 🔵 SOLO LECTURA
- * No scrapea nunca.
- */
 export async function getValuation(
   item: Item,
   options?: { allowStale?: boolean }
@@ -398,17 +425,15 @@ export async function getValuation(
   };
 }
 
-/**
- * 🟡 REFRESH / BACKGROUND
- */
 export async function refreshValuation(
   item: Item
 ): Promise<ValuationResult | null> {
   const key = buildCacheKey(item);
 
-  const { valuation, attempts } = await scrapeValuation(item);
+  const { valuation, attempts, validResults } = await scrapeValuation(item);
 
   await logScraperAttempts(item, attempts);
+  await saveSourceMarketData(item, validResults);
 
   if (!valuation) {
     return null;
