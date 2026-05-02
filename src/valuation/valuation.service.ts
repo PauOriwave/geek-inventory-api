@@ -6,7 +6,6 @@ import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getDungeonMarvelsPrice } from "./sources/dungeon-marvels.source";
 import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
-import { getCardMarketPrice } from "./sources/cardmarket.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
@@ -80,12 +79,6 @@ const sources: SourceDefinition[] = [
     priority: 92,
     categories: ["lego"],
     handler: getBrickEconomyPrice
-  },
-  {
-    name: "cardmarket",
-    priority: 94,
-    categories: ["tcg"],
-    handler: getCardMarketPrice
   }
 ];
 
