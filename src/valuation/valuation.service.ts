@@ -7,6 +7,7 @@ import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source"
 import { getDungeonMarvelsPrice } from "./sources/dungeon-marvels.source";
 import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
 import { getPokemonTcgPrice } from "./sources/pokemon-tcg.source";
+import { getTcgDexPrice } from "./sources/tcgdex.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
@@ -86,6 +87,12 @@ const sources: SourceDefinition[] = [
     priority: 93,
     categories: ["tcg"],
     handler: getPokemonTcgPrice
+  },
+  {
+    name: "tcgdex",
+    priority: 95,
+    categories: ["tcg"],
+    handler: getTcgDexPrice
   }
 ];
 
@@ -173,6 +180,7 @@ async function scrapeValuation(item: Item): Promise<{
   valuation: ValuationResult | null;
   attempts: ScraperAttemptLog[];
   validResults: ScraperSourceResult[];
+  marketDataResults: ScraperSourceResult[];
 }> {
   const defaultQuery = buildSourceQuery(item);
   const activeSources = getSourcesForItem(item);
@@ -203,7 +211,8 @@ async function scrapeValuation(item: Item): Promise<{
     return {
       valuation: null,
       attempts: [],
-      validResults: []
+      validResults: [],
+      marketDataResults: []
     };
   }
 
@@ -230,6 +239,7 @@ async function scrapeValuation(item: Item): Promise<{
 
   const attempts: ScraperAttemptLog[] = [];
   const valid: ScraperSourceResult[] = [];
+  const marketDataResults: ScraperSourceResult[] = [];
 
   for (let i = 0; i < settled.length; i++) {
     const entry = settled[i];
@@ -238,11 +248,22 @@ async function scrapeValuation(item: Item): Promise<{
     if (entry.status === "fulfilled") {
       const result = entry.value.result;
 
+      if (
+        result?.metadata &&
+        Object.keys(result.metadata).length > 0
+      ) {
+        marketDataResults.push(result);
+      }
+
       if (!result || result.price <= 0 || result.confidence <= 0) {
         attempts.push({
           source: sourceName,
           query: result?.query ?? defaultQuery,
-          status: "NO_DATA"
+          status: "NO_DATA",
+          matchedTitle: result?.matchedTitle,
+          matchedUrl: result?.matchedUrl,
+          matchedPrice: result?.price && result.price > 0 ? result.price : undefined,
+          confidence: result?.confidence
         });
         continue;
       }
@@ -287,7 +308,8 @@ async function scrapeValuation(item: Item): Promise<{
     return {
       valuation: null,
       attempts,
-      validResults: []
+      validResults: [],
+      marketDataResults
     };
   }
 
@@ -304,7 +326,8 @@ async function scrapeValuation(item: Item): Promise<{
           )
         },
         attempts,
-        validResults: valid
+        validResults: valid,
+        marketDataResults
       };
     }
   }
@@ -314,7 +337,8 @@ async function scrapeValuation(item: Item): Promise<{
   return {
     valuation: weighted,
     attempts,
-    validResults: valid
+    validResults: valid,
+    marketDataResults
   };
 }
 
@@ -431,10 +455,14 @@ export async function refreshValuation(
 ): Promise<ValuationResult | null> {
   const key = buildCacheKey(item);
 
-  const { valuation, attempts, validResults } = await scrapeValuation(item);
+  const {
+    valuation,
+    attempts,
+    marketDataResults
+  } = await scrapeValuation(item);
 
   await logScraperAttempts(item, attempts);
-  await saveSourceMarketData(item, validResults);
+  await saveSourceMarketData(item, marketDataResults);
 
   if (!valuation) return null;
 
