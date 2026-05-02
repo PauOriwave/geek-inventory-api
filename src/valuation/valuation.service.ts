@@ -190,6 +190,15 @@ async function scrapeValuation(item: Item): Promise<{
     activeSources.map((source) => source.name)
   );
 
+  console.log(
+    "[valuation] active source handlers:",
+    activeSources.map((source) => ({
+      name: source.name,
+      categories: source.categories,
+      hasHandler: typeof source.handler === "function"
+    }))
+  );
+
   if (activeSources.length === 0) {
     return {
       valuation: null,
@@ -316,9 +325,7 @@ function pickHighConfidenceBest(
     (result) => result.confidence >= HIGH_CONFIDENCE_THRESHOLD
   );
 
-  if (highConfidence.length === 0) {
-    return null;
-  }
+  if (highConfidence.length === 0) return null;
 
   highConfidence.sort((a, b) => {
     const aPriority = getSourcePriority(a.source);
@@ -333,9 +340,7 @@ function pickHighConfidenceBest(
 
   const best = highConfidence[0];
 
-  if (!best) {
-    return null;
-  }
+  if (!best) return null;
 
   console.log("[valuation] Using high confidence source:", {
     source: best.source,
@@ -365,9 +370,7 @@ function calculateWeightedValuation(
     0
   );
 
-  if (totalWeight <= 0) {
-    return null;
-  }
+  if (totalWeight <= 0) return null;
 
   const weightedPrice =
     weightedResults.reduce(
@@ -414,9 +417,7 @@ export async function getValuation(
 
   if (!cache) return null;
 
-  if (!allowStale && !isCacheValid(cache.updatedAt)) {
-    return null;
-  }
+  if (!allowStale && !isCacheValid(cache.updatedAt)) return null;
 
   return {
     price: Number(cache.price),
@@ -435,9 +436,7 @@ export async function refreshValuation(
   await logScraperAttempts(item, attempts);
   await saveSourceMarketData(item, validResults);
 
-  if (!valuation) {
-    return null;
-  }
+  if (!valuation) return null;
 
   const now = new Date();
 

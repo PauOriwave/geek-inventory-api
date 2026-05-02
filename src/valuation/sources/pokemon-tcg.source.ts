@@ -9,9 +9,16 @@ type PokemonTcgApiResponse = {
 type PokemonTcgCard = {
   id: string;
   name: string;
+  supertype?: string;
+  subtypes?: string[];
+  hp?: string;
+  types?: string[];
+  evolvesFrom?: string;
   number?: string;
-  rarity?: string;
   artist?: string;
+  rarity?: string;
+  flavorText?: string;
+  nationalPokedexNumbers?: number[];
   set?: {
     id?: string;
     name?: string;
@@ -70,6 +77,12 @@ type ScoredPokemonCard = {
   score: number;
 };
 
+type PokemonPricing = {
+  price: number | null;
+  priceBasis: string;
+  currency: "EUR" | "USD" | null;
+};
+
 const BASE_URL = "https://api.pokemontcg.io/v2";
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -98,7 +111,7 @@ export async function getPokemonTcgPrice(
     return null;
   }
 
-  const best = pickBestPokemonCard(item, parsed, cards);
+  const best = pickBestPokemonCard(parsed, cards);
 
   if (!best) {
     console.log("🟨 PTCG cards found but no reliable match:", {
@@ -110,27 +123,33 @@ export async function getPokemonTcgPrice(
   }
 
   const pricing = extractPokemonPricing(best.card);
-
-  if (!pricing.price || pricing.price <= 0) {
-    console.log("🟨 PTCG matched card but no usable price:", {
-      id: best.card.id,
-      name: best.card.name,
-      set: best.card.set?.name,
-      number: best.card.number,
-      tcgplayer: best.card.tcgplayer?.prices,
-      cardmarket: best.card.cardmarket?.prices
-    });
-
-    return null;
-  }
-
-  const confidence = computeConfidence(item, parsed, best);
-
+  const confidence = computeConfidence(parsed, best);
   const matchedTitle = buildMatchedTitle(best.card);
+
   const matchedUrl =
     best.card.cardmarket?.url ??
     best.card.tcgplayer?.url ??
-    null;
+    undefined;
+
+  if (!pricing.price || pricing.price <= 0) {
+    console.log("🟨 PTCG matched card without price:", {
+      id: best.card.id,
+      name: best.card.name,
+      set: best.card.set?.name,
+      setCode: best.card.set?.ptcgoCode,
+      number: best.card.number
+    });
+
+    return {
+      price: 0,
+      source: "pokemon_tcg_api",
+      confidence,
+      matchedTitle,
+      matchedUrl,
+      query,
+      metadata: buildPokemonMetadata(best.card, parsed, pricing, cards)
+    };
+  }
 
   console.log("🟨 PTCG selected:", {
     id: best.card.id,
@@ -146,35 +165,9 @@ export async function getPokemonTcgPrice(
     source: "pokemon_tcg_api",
     confidence,
     matchedTitle,
-    matchedUrl: matchedUrl ?? undefined,
+    matchedUrl,
     query,
-    metadata: {
-      provider: "pokemon_tcg_api",
-      pokemonTcgId: best.card.id,
-      name: best.card.name,
-      setId: best.card.set?.id ?? null,
-      setName: best.card.set?.name ?? null,
-      setSeries: best.card.set?.series ?? null,
-      setCode: best.card.set?.ptcgoCode ?? parsed.setCode,
-      cardNumber: best.card.number ?? parsed.cardNumber,
-      rarity: best.card.rarity ?? null,
-      artist: best.card.artist ?? null,
-      imageSmall: best.card.images?.small ?? null,
-      imageLarge: best.card.images?.large ?? null,
-      priceBasis: pricing.priceBasis,
-      currency: pricing.currency,
-      cardmarket: {
-        url: best.card.cardmarket?.url ?? null,
-        updatedAt: best.card.cardmarket?.updatedAt ?? null,
-        prices: best.card.cardmarket?.prices ?? null
-      },
-      tcgplayer: {
-        url: best.card.tcgplayer?.url ?? null,
-        updatedAt: best.card.tcgplayer?.updatedAt ?? null,
-        prices: best.card.tcgplayer?.prices ?? null
-      },
-      alternatives: buildAlternatives(cards, parsed)
-    }
+    metadata: buildPokemonMetadata(best.card, parsed, pricing, cards)
   };
 }
 
@@ -202,7 +195,9 @@ async function searchPokemonCards(
       allCards.push(card);
     }
 
-    if (allCards.length > 0 && parsed.cardNumber) break;
+    if (allCards.length > 0 && parsed.cardNumber) {
+      break;
+    }
   }
 
   return allCards;
@@ -210,11 +205,11 @@ async function searchPokemonCards(
 
 function buildApiQueries(parsed: ParsedPokemonQuery): string[] {
   const queries: string[] = [];
-
   const escapedName = escapeLuceneValue(parsed.cleanName);
 
   if (parsed.cardNumber && parsed.setCode) {
     queries.push(`name:"${escapedName}" number:${parsed.cardNumber} set.ptcgoCode:${parsed.setCode}`);
+    queries.push(`name:"${escapedName}" number:${parsed.cardNumber} set.id:${parsed.setCode.toLowerCase()}`);
     queries.push(`name:"${escapedName}" number:${parsed.cardNumber}`);
   }
 
@@ -224,6 +219,7 @@ function buildApiQueries(parsed: ParsedPokemonQuery): string[] {
 
   if (parsed.setCode) {
     queries.push(`name:"${escapedName}" set.ptcgoCode:${parsed.setCode}`);
+    queries.push(`name:"${escapedName}" set.id:${parsed.setCode.toLowerCase()}`);
   }
 
   queries.push(`name:"${escapedName}"`);
@@ -288,7 +284,7 @@ function parsePokemonQuery(item: Item): ParsedPokemonQuery {
 
   const possibleSetCode =
     platform ||
-    parenthesisParts.find((part) => /^[A-Z0-9]{2,6}$/i.test(part)) ||
+    parenthesisParts.find((part) => /^[A-Z0-9]{2,8}$/i.test(part)) ||
     null;
 
   const possibleCardNumber =
@@ -311,7 +307,6 @@ function parsePokemonQuery(item: Item): ParsedPokemonQuery {
 }
 
 function pickBestPokemonCard(
-  item: Item,
   parsed: ParsedPokemonQuery,
   cards: PokemonTcgCard[]
 ): ScoredPokemonCard | null {
@@ -320,6 +315,7 @@ function pickBestPokemonCard(
   const scored = cards.map((card) => {
     const cardName = normalizePokemonText(card.name);
     const setCode = normalizeSetCode(card.set?.ptcgoCode ?? "");
+    const setId = normalizeSetCode(card.set?.id ?? "");
     const number = normalizeCardNumber(card.number ?? "");
 
     let score = similarityScore(wantedName, cardName);
@@ -327,10 +323,20 @@ function pickBestPokemonCard(
     if (cardName === wantedName) score += 0.4;
     if (cardName.includes(wantedName)) score += 0.2;
 
-    if (parsed.cardNumber && number === parsed.cardNumber) score += 0.45;
-    if (parsed.setCode && setCode === parsed.setCode) score += 0.35;
+    if (parsed.cardNumber && number === parsed.cardNumber) {
+      score += 0.45;
+    }
 
-    if (card.cardmarket?.prices || card.tcgplayer?.prices) score += 0.08;
+    if (
+      parsed.setCode &&
+      (setCode === parsed.setCode || setId === parsed.setCode)
+    ) {
+      score += 0.35;
+    }
+
+    if (card.cardmarket?.prices || card.tcgplayer?.prices) {
+      score += 0.08;
+    }
 
     return {
       card,
@@ -347,6 +353,7 @@ function pickBestPokemonCard(
       name: entry.card.name,
       set: entry.card.set?.name,
       setCode: entry.card.set?.ptcgoCode,
+      setId: entry.card.set?.id,
       number: entry.card.number,
       score: Number(entry.score.toFixed(2))
     }))
@@ -363,11 +370,7 @@ function pickBestPokemonCard(
   return best;
 }
 
-function extractPokemonPricing(card: PokemonTcgCard): {
-  price: number | null;
-  priceBasis: string;
-  currency: "EUR" | "USD" | null;
-} {
+function extractPokemonPricing(card: PokemonTcgCard): PokemonPricing {
   const cardmarketPrices = card.cardmarket?.prices;
 
   if (cardmarketPrices?.trendPrice && cardmarketPrices.trendPrice > 0) {
@@ -432,6 +435,7 @@ function extractBestTcgPlayerPrice(card: PokemonTcgCard): {
   priceBasis: string;
 } {
   const prices = card.tcgplayer?.prices;
+
   if (!prices) {
     return {
       price: null,
@@ -502,7 +506,6 @@ function extractBestTcgPlayerPrice(card: PokemonTcgCard): {
 }
 
 function computeConfidence(
-  item: Item,
   parsed: ParsedPokemonQuery,
   scored: ScoredPokemonCard
 ): number {
@@ -520,9 +523,12 @@ function computeConfidence(
     confidence += 0.15;
   }
 
+  const matchedSetCode = normalizeSetCode(scored.card.set?.ptcgoCode ?? "");
+  const matchedSetId = normalizeSetCode(scored.card.set?.id ?? "");
+
   if (
     parsed.setCode &&
-    normalizeSetCode(scored.card.set?.ptcgoCode ?? "") === parsed.setCode
+    (matchedSetCode === parsed.setCode || matchedSetId === parsed.setCode)
   ) {
     confidence += 0.1;
   }
@@ -535,9 +541,12 @@ function computeConfidence(
 }
 
 function buildMatchedTitle(card: PokemonTcgCard): string {
+  const setLabel = card.set?.ptcgoCode || card.set?.id || "";
+  const numberLabel = card.number || "";
+
   const parts = [
     card.name,
-    card.set?.ptcgoCode ? `(${card.set.ptcgoCode} ${card.number ?? ""})` : card.number ? `(${card.number})` : "",
+    setLabel || numberLabel ? `(${setLabel} ${numberLabel})` : "",
     card.set?.name ? `- ${card.set.name}` : ""
   ];
 
@@ -545,6 +554,63 @@ function buildMatchedTitle(card: PokemonTcgCard): string {
     .map((part) => String(part || "").trim())
     .filter(Boolean)
     .join(" ");
+}
+
+function buildPokemonMetadata(
+  card: PokemonTcgCard,
+  parsed: ParsedPokemonQuery,
+  pricing: PokemonPricing,
+  cards: PokemonTcgCard[]
+): Record<string, unknown> {
+  return {
+    provider: "pokemon_tcg_api",
+    pokemonTcgId: card.id,
+
+    name: card.name,
+    supertype: card.supertype ?? null,
+    subtypes: card.subtypes ?? null,
+    hp: card.hp ?? null,
+    types: card.types ?? null,
+    evolvesFrom: card.evolvesFrom ?? null,
+
+    setId: card.set?.id ?? null,
+    setName: card.set?.name ?? null,
+    setSeries: card.set?.series ?? null,
+    setCode: card.set?.ptcgoCode ?? null,
+    setPrintedTotal: card.set?.printedTotal ?? null,
+    setTotal: card.set?.total ?? null,
+    setReleaseDate: card.set?.releaseDate ?? null,
+
+    requestedSetCode: parsed.setCode,
+    requestedCardNumber: parsed.cardNumber,
+    cardNumber: card.number ?? null,
+
+    rarity: card.rarity ?? null,
+    artist: card.artist ?? null,
+    flavorText: card.flavorText ?? null,
+    nationalPokedexNumbers: card.nationalPokedexNumbers ?? null,
+
+    imageSmall: card.images?.small ?? null,
+    imageLarge: card.images?.large ?? null,
+
+    hasPrice: Boolean(pricing.price && pricing.price > 0),
+    priceBasis: pricing.priceBasis,
+    currency: pricing.currency,
+
+    cardmarket: {
+      url: card.cardmarket?.url ?? null,
+      updatedAt: card.cardmarket?.updatedAt ?? null,
+      prices: card.cardmarket?.prices ?? null
+    },
+
+    tcgplayer: {
+      url: card.tcgplayer?.url ?? null,
+      updatedAt: card.tcgplayer?.updatedAt ?? null,
+      prices: card.tcgplayer?.prices ?? null
+    },
+
+    alternatives: buildAlternatives(cards, parsed)
+  };
 }
 
 function buildAlternatives(
@@ -560,8 +626,11 @@ function buildAlternatives(
     number: card.number ?? null,
     rarity: card.rarity ?? null,
     imageSmall: card.images?.small ?? null,
+    imageLarge: card.images?.large ?? null,
     cardmarketUrl: card.cardmarket?.url ?? null,
     tcgplayerUrl: card.tcgplayer?.url ?? null,
+    cardmarketPrices: card.cardmarket?.prices ?? null,
+    tcgplayerPrices: card.tcgplayer?.prices ?? null,
     match: {
       requestedName: parsed.cleanName,
       requestedSetCode: parsed.setCode,
