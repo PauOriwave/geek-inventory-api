@@ -8,6 +8,7 @@ import { getDungeonMarvelsPrice } from "./sources/dungeon-marvels.source";
 import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
 import { getPokemonTcgPrice } from "./sources/pokemon-tcg.source";
 import { getTcgDexPrice } from "./sources/tcgdex.source";
+import { getCardTraderPrice } from "./sources/cardtrader.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
@@ -93,6 +94,12 @@ const sources: SourceDefinition[] = [
     priority: 95,
     categories: ["tcg"],
     handler: getTcgDexPrice
+  },
+  {
+    name: "cardtrader",
+    priority: 96,
+    categories: ["tcg"],
+    handler: getCardTraderPrice
   }
 ];
 
@@ -159,21 +166,25 @@ async function saveSourceMarketData(
 
   if (enrichedResults.length === 0) return;
 
-  await prisma.sourceMarketData.createMany({
-    data: enrichedResults.map((result) => ({
-      itemId: item.id,
-      source: result.source,
-      sourceUrl: result.matchedUrl ?? null,
-      rawData: toPrismaJson({
-        price: result.price,
-        confidence: result.confidence,
-        matchedTitle: result.matchedTitle ?? null,
-        matchedUrl: result.matchedUrl ?? null,
-        query: result.query ?? null,
-        metadata: result.metadata ?? {}
-      })
-    }))
-  });
+  try {
+    await prisma.sourceMarketData.createMany({
+      data: enrichedResults.map((result) => ({
+        itemId: item.id,
+        source: result.source,
+        sourceUrl: result.matchedUrl ?? null,
+        rawData: toPrismaJson({
+          price: result.price,
+          confidence: result.confidence,
+          matchedTitle: result.matchedTitle ?? null,
+          matchedUrl: result.matchedUrl ?? null,
+          query: result.query ?? null,
+          metadata: result.metadata ?? {}
+        })
+      }))
+    });
+  } catch (error) {
+    console.log("[valuation] sourceMarketData save skipped:", error);
+  }
 }
 
 async function scrapeValuation(item: Item): Promise<{
@@ -262,7 +273,8 @@ async function scrapeValuation(item: Item): Promise<{
           status: "NO_DATA",
           matchedTitle: result?.matchedTitle,
           matchedUrl: result?.matchedUrl,
-          matchedPrice: result?.price && result.price > 0 ? result.price : undefined,
+          matchedPrice:
+            result?.price && result.price > 0 ? result.price : undefined,
           confidence: result?.confidence
         });
         continue;
