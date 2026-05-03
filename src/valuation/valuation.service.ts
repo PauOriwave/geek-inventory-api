@@ -9,6 +9,7 @@ import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
 import { getPokemonTcgPrice } from "./sources/pokemon-tcg.source";
 import { getTcgDexPrice } from "./sources/tcgdex.source";
 import { getCardTraderPrice } from "./sources/cardtrader.source";
+import { getEbaySoldPrice } from "./sources/ebay-sold.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
@@ -100,6 +101,12 @@ const sources: SourceDefinition[] = [
     priority: 96,
     categories: ["tcg"],
     handler: getCardTraderPrice
+  },
+  {
+    name: "ebay_sold",
+    priority: 97,
+    categories: ["tcg"],
+    handler: getEbaySoldPrice
   }
 ];
 
