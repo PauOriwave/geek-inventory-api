@@ -30,6 +30,7 @@ type CardTraderCandidate = {
   url: string;
   cardNumber: string | null;
   setName: string | null;
+  rarity: string | null;
   score: number;
 };
 
@@ -40,6 +41,14 @@ type CardTraderDetail = {
   priceBasis: string;
   currency: "EUR" | "USD" | "GBP" | null;
   rawPriceText: string | null;
+  extractedPrices: ExtractedPrice[];
+};
+
+type ExtractedPrice = {
+  price: number;
+  basis: string;
+  currency: "EUR" | "USD" | "GBP" | null;
+  context: string;
 };
 
 const CARDTRADER_BASE_URL = "https://www.cardtrader.com";
@@ -75,6 +84,23 @@ const TRUSTED_PRICE_LABELS = [
   "US Market Price"
 ];
 
+const TRUSTED_JSON_PRICE_KEYS = [
+  "bestDeal",
+  "best_deal",
+  "ctMinPrice",
+  "ct_min_price",
+  "ctMarketPrice",
+  "ct_market_price",
+  "marketPrice",
+  "market_price",
+  "minPrice",
+  "min_price",
+  "priceCents",
+  "price_cents",
+  "price",
+  "amount"
+];
+
 export async function getCardTraderPrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
@@ -96,14 +122,23 @@ export async function getCardTraderPrice(
 
   console.log(
     "🟧 CT candidates:",
-    candidates.slice(0, 10).map((candidate) => ({
+    candidates.slice(0, 12).map((candidate) => ({
       title: candidate.title,
       cardNumber: candidate.cardNumber,
       setName: candidate.setName,
+      rarity: candidate.rarity,
       score: Number(candidate.score.toFixed(2)),
       url: candidate.url
     }))
   );
+
+  let bestNoPrice:
+    | {
+        candidate: CardTraderCandidate;
+        detail: CardTraderDetail;
+        confidence: number;
+      }
+    | null = null;
 
   for (const candidate of candidates) {
     console.log("🟧 CT Detail:", candidate.url);
@@ -123,6 +158,7 @@ export async function getCardTraderPrice(
       priceBasis: detail.priceBasis,
       currency: detail.currency,
       rawPriceText: detail.rawPriceText,
+      extractedPrices: detail.extractedPrices.slice(0, 8),
       confidence,
       url: detail.url
     });
@@ -139,24 +175,15 @@ export async function getCardTraderPrice(
     }
 
     if (!detail.price || detail.price <= 0) {
-      return {
-        price: 0,
-        source: "cardtrader",
-        confidence,
-        matchedTitle: detail.title,
-        matchedUrl: detail.url,
-        query,
-        metadata: {
-          provider: "cardtrader",
-          hasPrice: false,
-          priceBasis: detail.priceBasis,
-          currency: detail.currency,
-          rawPriceText: detail.rawPriceText,
-          parsed,
+      if (!bestNoPrice || confidence > bestNoPrice.confidence) {
+        bestNoPrice = {
           candidate,
-          tcgdexCandidates: tcgdexCards.slice(0, 10)
-        }
-      };
+          detail,
+          confidence
+        };
+      }
+
+      continue;
     }
 
     return {
@@ -172,8 +199,31 @@ export async function getCardTraderPrice(
         priceBasis: detail.priceBasis,
         currency: detail.currency,
         rawPriceText: detail.rawPriceText,
+        extractedPrices: detail.extractedPrices,
         parsed,
         candidate,
+        tcgdexCandidates: tcgdexCards.slice(0, 10)
+      }
+    };
+  }
+
+  if (bestNoPrice) {
+    return {
+      price: 0,
+      source: "cardtrader",
+      confidence: bestNoPrice.confidence,
+      matchedTitle: bestNoPrice.detail.title,
+      matchedUrl: bestNoPrice.detail.url,
+      query,
+      metadata: {
+        provider: "cardtrader",
+        hasPrice: false,
+        priceBasis: bestNoPrice.detail.priceBasis,
+        currency: bestNoPrice.detail.currency,
+        rawPriceText: bestNoPrice.detail.rawPriceText,
+        extractedPrices: bestNoPrice.detail.extractedPrices,
+        parsed,
+        candidate: bestNoPrice.candidate,
         tcgdexCandidates: tcgdexCards.slice(0, 10)
       }
     };
@@ -262,6 +312,7 @@ function buildCardTraderCandidates(
         url,
         cardNumber: localId,
         setName,
+        rarity: raritySlug,
         score: scoreCandidate(parsed, {
           title: name,
           cardNumber: localId,
@@ -321,55 +372,327 @@ function parseCardTraderDetail(
 
   if (!title) return null;
 
-  const price = extractTrustedPrice(bodyText);
+  const extractedPrices = extractAllTrustedPrices($, html, bodyText);
+  const selected = selectBestExtractedPrice(extractedPrices);
   const rawPriceText = extractRawTrustedPriceText(bodyText);
 
   return {
     title,
     url,
-    price: price?.price ?? null,
-    priceBasis: price?.basis ?? "none",
-    currency: price?.currency ?? null,
-    rawPriceText
+    price: selected?.price ?? null,
+    priceBasis: selected?.basis ?? "none",
+    currency: selected?.currency ?? null,
+    rawPriceText,
+    extractedPrices
   };
 }
 
-function extractTrustedPrice(
-  text: string
-): { price: number; basis: string; currency: "EUR" | "USD" | "GBP" } | null {
+function extractAllTrustedPrices(
+  $: cheerio.CheerioAPI,
+  html: string,
+  bodyText: string
+): ExtractedPrice[] {
+  const prices: ExtractedPrice[] = [];
+
+  prices.push(...extractTrustedPricesFromText(bodyText));
+  prices.push(...extractTrustedPricesFromDom($));
+  prices.push(...extractTrustedPricesFromScripts(html));
+
+  return dedupePrices(prices).filter((entry) => isUsableCardPrice(entry.price));
+}
+
+function extractTrustedPricesFromText(text: string): ExtractedPrice[] {
+  const prices: ExtractedPrice[] = [];
+
   for (const label of TRUSTED_PRICE_LABELS) {
-    const segment = extractSegmentAfterLabel(text, label, 100);
+    const segment = extractSegmentAfterLabel(text, label, 180);
 
     if (!segment) continue;
-
-    if (segment.includes("—") || segment.includes("-Add") || segment.includes("–")) {
-      const currencyInSegment = segment.match(/[€$£]\s*\d{1,6}(?:[.,]\d{1,2})?/);
-      if (!currencyInSegment) continue;
-    }
 
     const parsed = extractFirstPriceFromSegment(segment);
 
     if (!parsed) continue;
 
-    return {
-      ...parsed,
-      basis: label
-    };
+    prices.push({
+      price: parsed.price,
+      currency: parsed.currency,
+      basis: `text.${label}`,
+      context: segment
+    });
+  }
+
+  return prices;
+}
+
+function extractTrustedPricesFromDom($: cheerio.CheerioAPI): ExtractedPrice[] {
+  const prices: ExtractedPrice[] = [];
+
+  $("body *").each((_, el) => {
+    const node = $(el);
+    const text = node.text().replace(/\s+/g, " ").trim();
+
+    if (!text || text.length > 400) return;
+
+    const hasTrustedLabel = TRUSTED_PRICE_LABELS.some((label) =>
+      normalizeText(text).includes(normalizeText(label))
+    );
+
+    if (!hasTrustedLabel) return;
+
+    const parsed = extractFirstPriceFromSegment(text);
+
+    if (!parsed) return;
+
+    prices.push({
+      price: parsed.price,
+      currency: parsed.currency,
+      basis: "dom.trusted_label",
+      context: text
+    });
+  });
+
+  return prices;
+}
+
+function extractTrustedPricesFromScripts(html: string): ExtractedPrice[] {
+  const prices: ExtractedPrice[] = [];
+  const $ = cheerio.load(html);
+
+  $("script").each((_, el) => {
+    const content = $(el).html() || "";
+
+    if (!content) return;
+
+    const jsonBlocks = extractJsonBlocks(content);
+
+    for (const block of jsonBlocks) {
+      const parsed = safeJsonParse(block);
+      if (!parsed) continue;
+
+      prices.push(...extractPricesFromJson(parsed));
+    }
+
+    prices.push(...extractLooseScriptPrices(content));
+  });
+
+  return prices;
+}
+
+function extractJsonBlocks(scriptContent: string): string[] {
+  const blocks: string[] = [];
+
+  const trimmed = scriptContent.trim();
+
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    blocks.push(trimmed);
+  }
+
+  const nextDataMatch = trimmed.match(
+    /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)<\/script>/is
+  );
+
+  if (nextDataMatch?.[1]) {
+    blocks.push(nextDataMatch[1]);
+  }
+
+  const assignmentMatches = [
+    ...trimmed.matchAll(
+      /(?:window\.__INITIAL_STATE__|window\.__NUXT__|window\.__APOLLO_STATE__|window\.__REDUX_STATE__)\s*=\s*({.*?});/gis
+    )
+  ];
+
+  for (const match of assignmentMatches) {
+    if (match[1]) blocks.push(match[1]);
+  }
+
+  return blocks;
+}
+
+function extractPricesFromJson(value: unknown): ExtractedPrice[] {
+  const prices: ExtractedPrice[] = [];
+
+  function walk(node: unknown, path: string[]) {
+    if (node == null) return;
+
+    if (Array.isArray(node)) {
+      node.forEach((entry, index) => walk(entry, [...path, String(index)]));
+      return;
+    }
+
+    if (typeof node === "object") {
+      const record = node as Record<string, unknown>;
+
+      for (const [key, nestedValue] of Object.entries(record)) {
+        const normalizedKey = key.toLowerCase();
+
+        if (isTrustedJsonPriceKey(normalizedKey)) {
+          const parsed = parseJsonPriceValue(nestedValue);
+
+          if (parsed && isUsableCardPrice(parsed)) {
+            prices.push({
+              price: parsed,
+              currency: inferCurrencyFromObject(record),
+              basis: `json.${[...path, key].join(".")}`,
+              context: JSON.stringify(record).slice(0, 500)
+            });
+          }
+        }
+
+        walk(nestedValue, [...path, key]);
+      }
+    }
+  }
+
+  walk(value, []);
+
+  return prices;
+}
+
+function extractLooseScriptPrices(scriptContent: string): ExtractedPrice[] {
+  const prices: ExtractedPrice[] = [];
+
+  const loosePatterns = [
+    /"(?:(?:ct_)?market_price|marketPrice|ctMarketPrice|bestDeal|best_deal|minPrice|min_price|price)"\s*:\s*"?([€$£]?\s*\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
+    /(?:ctMarketPrice|ctMinPrice|bestDeal|marketPrice|minPrice|price)\s*[:=]\s*"?([€$£]?\s*\d{1,6}(?:[.,]\d{1,2})?)"?/gi
+  ];
+
+  for (const pattern of loosePatterns) {
+    for (const match of scriptContent.matchAll(pattern)) {
+      const raw = match[1];
+      const price = parseCardPrice(raw);
+      const currency = parseCurrency(raw?.match(/[€$£]/)?.[0]);
+
+      if (!price || !isUsableCardPrice(price)) continue;
+
+      prices.push({
+        price,
+        currency,
+        basis: "script.loose_price",
+        context: getMatchContext(scriptContent, match.index ?? 0, 180)
+      });
+    }
+  }
+
+  return prices;
+}
+
+function selectBestExtractedPrice(prices: ExtractedPrice[]): ExtractedPrice | null {
+  const trusted = prices
+    .filter((entry) => isUsableCardPrice(entry.price))
+    .filter((entry) => !isBadPriceContext(entry.context))
+    .sort((a, b) => getPriceBasisPriority(b.basis) - getPriceBasisPriority(a.basis));
+
+  return trusted[0] ?? null;
+}
+
+function getPriceBasisPriority(basis: string): number {
+  const normalized = basis.toLowerCase();
+
+  if (normalized.includes("best deal")) return 100;
+  if (normalized.includes("ct min price")) return 95;
+  if (normalized.includes("ct market price")) return 90;
+  if (normalized.includes("marketprice")) return 85;
+  if (normalized.includes("market_price")) return 85;
+  if (normalized.includes("mindprice")) return 80;
+  if (normalized.includes("min_price")) return 80;
+  if (normalized.includes("json")) return 70;
+  if (normalized.includes("dom")) return 60;
+  if (normalized.includes("script")) return 50;
+
+  return 10;
+}
+
+function isTrustedJsonPriceKey(normalizedKey: string): boolean {
+  return TRUSTED_JSON_PRICE_KEYS.some(
+    (key) => normalizedKey === key.toLowerCase()
+  );
+}
+
+function parseJsonPriceValue(value: unknown): number | null {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) return null;
+
+    if (value > 10000) {
+      return Number((value / 100).toFixed(2));
+    }
+
+    return value;
+  }
+
+  if (typeof value === "string") {
+    return parseCardPrice(value);
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+
+    const amount =
+      record.amount ??
+      record.value ??
+      record.price ??
+      record.cents ??
+      record.amountCents ??
+      record.amount_cents;
+
+    return parseJsonPriceValue(amount);
   }
 
   return null;
 }
 
+function inferCurrencyFromObject(
+  record: Record<string, unknown>
+): "EUR" | "USD" | "GBP" | null {
+  const raw =
+    record.currency ??
+    record.currencyCode ??
+    record.currency_code ??
+    record.symbol ??
+    null;
+
+  const value = String(raw || "").toUpperCase();
+
+  if (value === "EUR" || value === "€") return "EUR";
+  if (value === "USD" || value === "$") return "USD";
+  if (value === "GBP" || value === "£") return "GBP";
+
+  return null;
+}
+
+function dedupePrices(prices: ExtractedPrice[]): ExtractedPrice[] {
+  const seen = new Set<string>();
+  const deduped: ExtractedPrice[] = [];
+
+  for (const price of prices) {
+    const key = `${price.price}|${price.currency}|${price.basis}`;
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    deduped.push(price);
+  }
+
+  return deduped;
+}
+
 function extractFirstPriceFromSegment(
   segment: string
-): { price: number; currency: "EUR" | "USD" | "GBP" } | null {
+): { price: number; currency: "EUR" | "USD" | "GBP" | null } | null {
+  if (segment.includes("—") || segment.includes("–")) {
+    const currencyInSegment = segment.match(/[€$£]\s*\d{1,6}(?:[.,]\d{1,2})?/);
+    if (!currencyInSegment) return null;
+  }
+
   const leading = segment.match(/([€$£])\s*(\d{1,6}(?:[.,]\d{1,2})?)/);
 
   if (leading) {
     const currency = parseCurrency(leading[1]);
     const price = parseCardPrice(leading[2]);
 
-    if (currency && price && price > 0) {
+    if (price && price > 0) {
       return {
         price,
         currency
@@ -383,7 +706,7 @@ function extractFirstPriceFromSegment(
     const price = parseCardPrice(trailing[1]);
     const currency = parseCurrency(trailing[2]);
 
-    if (currency && price && price > 0) {
+    if (price && price > 0) {
       return {
         price,
         currency
@@ -408,7 +731,7 @@ function extractSegmentAfterLabel(
 
 function extractRawTrustedPriceText(text: string): string | null {
   for (const label of TRUSTED_PRICE_LABELS) {
-    const segment = extractSegmentAfterLabel(text, label, 120);
+    const segment = extractSegmentAfterLabel(text, label, 180);
 
     if (!segment) continue;
 
@@ -618,18 +941,9 @@ function isDetailCompatible(
   detail: CardTraderDetail
 ): boolean {
   const normalizedTitle = normalizeText(detail.title);
-  const normalizedCandidateSet = normalizeText(candidate.setName || "");
   const normalizedName = normalizeText(parsed.cleanName);
 
   if (!normalizedTitle.includes(normalizedName)) return false;
-
-  if (
-    candidate.setName &&
-    normalizedCandidateSet &&
-    !normalizeText(detail.url).includes(normalizedCandidateSet.replace(/\s+/g, ""))
-  ) {
-    return true;
-  }
 
   if (
     parsed.cardNumber &&
@@ -677,6 +991,34 @@ function parseCurrency(value?: string): "EUR" | "USD" | "GBP" | null {
   if (value === "$") return "USD";
   if (value === "£") return "GBP";
   return null;
+}
+
+function isUsableCardPrice(value: number): boolean {
+  return Number.isFinite(value) && value > 0 && value < 50000;
+}
+
+function isBadPriceContext(value: string): boolean {
+  const normalized = normalizeText(value);
+
+  const badTokens = [
+    "shipping",
+    "shipment",
+    "delivery",
+    "password",
+    "login",
+    "email",
+    "signup",
+    "sign up",
+    "wallet",
+    "credit",
+    "balance"
+  ];
+
+  return badTokens.some((token) => normalized.includes(token));
+}
+
+function getMatchContext(text: string, index: number, size: number): string {
+  return text.slice(Math.max(0, index - size), index + size);
 }
 
 function normalizeSetCode(value: string): string {
@@ -728,5 +1070,13 @@ function titleFromUrl(url: string): string {
       .trim();
   } catch {
     return "";
+  }
+}
+
+function safeJsonParse(value: string): unknown | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
   }
 }
