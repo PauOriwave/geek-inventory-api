@@ -188,12 +188,13 @@ export async function getCardTraderPrice(
     if (!detail) continue;
 
     const confidence = computeConfidence(parsed, candidate, detail);
+    const currency = detail.currency ?? "USD";
 
     console.log("🟧 CT parsed:", {
       title: detail.title,
       price: detail.price,
       priceBasis: detail.priceBasis,
-      currency: detail.currency,
+      currency,
       rawPriceText: detail.rawPriceText,
       extractedPrices: detail.extractedPrices.slice(0, 8),
       confidence,
@@ -215,7 +216,10 @@ export async function getCardTraderPrice(
       if (!bestNoPrice || confidence > bestNoPrice.confidence) {
         bestNoPrice = {
           candidate,
-          detail,
+          detail: {
+            ...detail,
+            currency
+          },
           confidence
         };
       }
@@ -225,6 +229,7 @@ export async function getCardTraderPrice(
 
     return {
       price: Number(detail.price.toFixed(2)),
+      currency,
       source: "cardtrader",
       confidence,
       matchedTitle: detail.title,
@@ -234,7 +239,8 @@ export async function getCardTraderPrice(
         provider: "cardtrader",
         hasPrice: true,
         priceBasis: detail.priceBasis,
-        currency: detail.currency,
+        currency,
+        originalCurrency: currency,
         rawPriceText: detail.rawPriceText,
         extractedPrices: detail.extractedPrices,
         parsed,
@@ -248,8 +254,11 @@ export async function getCardTraderPrice(
   }
 
   if (bestNoPrice) {
+    const currency = bestNoPrice.detail.currency ?? "USD";
+
     return {
       price: 0,
+      currency,
       source: "cardtrader",
       confidence: bestNoPrice.confidence,
       matchedTitle: bestNoPrice.detail.title,
@@ -259,7 +268,8 @@ export async function getCardTraderPrice(
         provider: "cardtrader",
         hasPrice: false,
         priceBasis: bestNoPrice.detail.priceBasis,
-        currency: bestNoPrice.detail.currency,
+        currency,
+        originalCurrency: currency,
         rawPriceText: bestNoPrice.detail.rawPriceText,
         extractedPrices: bestNoPrice.detail.extractedPrices,
         parsed,
