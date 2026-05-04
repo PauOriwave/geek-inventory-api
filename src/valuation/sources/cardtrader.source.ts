@@ -514,11 +514,18 @@ function extractJsonBlocks(scriptContent: string): string[] {
 function extractPricesFromJson(value: unknown): ExtractedPrice[] {
   const prices: ExtractedPrice[] = [];
 
-  function walk(node: unknown, path: string[]) {
+  function walk(
+    node: unknown,
+    path: string[],
+    parent?: Record<string, unknown>
+  ) {
     if (node == null) return;
 
     if (Array.isArray(node)) {
-      node.forEach((entry, index) => walk(entry, [...path, String(index)]));
+      node.forEach((entry, index) =>
+        walk(entry, [...path, String(index)], parent)
+      );
+
       return;
     }
 
@@ -532,16 +539,29 @@ function extractPricesFromJson(value: unknown): ExtractedPrice[] {
           const parsed = parseJsonPriceValue(nestedValue);
 
           if (parsed && isUsableCardPrice(parsed)) {
+            const currency =
+              inferCurrencyFromObject(record) ||
+              inferCurrencyFromObject(parent || {});
+
+            let basis = `json.${[...path, key].join(".")}`;
+
+            if (
+              record["@type"] === "Offer" ||
+              parent?.["@type"] === "Offer"
+            ) {
+              basis = "cardtrader.offer.price";
+            }
+
             prices.push({
               price: parsed,
-              currency: inferCurrencyFromObject(record),
-              basis: `json.${[...path, key].join(".")}`,
+              currency,
+              basis,
               context: JSON.stringify(record).slice(0, 500)
             });
           }
         }
 
-        walk(nestedValue, [...path, key]);
+        walk(nestedValue, [...path, key], record);
       }
     }
   }
@@ -594,6 +614,7 @@ function getPriceBasisPriority(basis: string): number {
   if (normalized.includes("best deal")) return 100;
   if (normalized.includes("ct min price")) return 95;
   if (normalized.includes("ct market price")) return 90;
+  if (normalized.includes("cardtrader.offer.price")) return 88;
   if (normalized.includes("marketprice")) return 85;
   if (normalized.includes("market_price")) return 85;
   if (normalized.includes("mindprice")) return 80;
@@ -647,13 +668,16 @@ function inferCurrencyFromObject(
   record: Record<string, unknown>
 ): "EUR" | "USD" | "GBP" | null {
   const raw =
+    record.priceCurrency ??
     record.currency ??
     record.currencyCode ??
     record.currency_code ??
     record.symbol ??
     null;
 
-  const value = String(raw || "").toUpperCase();
+  const value = String(raw || "")
+    .trim()
+    .toUpperCase();
 
   if (value === "EUR" || value === "€") return "EUR";
   if (value === "USD" || value === "$") return "USD";
@@ -920,9 +944,11 @@ function computeConfidence(
 ): number {
   let confidence = 0.45;
 
-  confidence += Math.min(0.25, candidate.score * 0.1);
+  confidence += Math.min(0.2, candidate.score * 0.08);
 
-  if (detail.price && detail.price > 0) confidence += 0.2;
+  if (detail.price && detail.price > 0) {
+    confidence += 0.18;
+  }
 
   if (
     parsed.cardNumber &&
@@ -932,7 +958,15 @@ function computeConfidence(
     confidence += 0.15;
   }
 
-  return Math.max(0.45, Math.min(0.93, Number(confidence.toFixed(2))));
+  if (detail.priceBasis === "cardtrader.offer.price") {
+    confidence += 0.08;
+  }
+
+  if (detail.currency === "USD" || detail.currency === "EUR") {
+    confidence += 0.04;
+  }
+
+  return Math.max(0.45, Math.min(0.88, Number(confidence.toFixed(2))));
 }
 
 function isDetailCompatible(
