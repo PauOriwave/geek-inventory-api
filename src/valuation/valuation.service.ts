@@ -106,7 +106,148 @@ const sources: SourceDefinition[] = [
 const CACHE_TTL_HOURS = 24;
 
 function getSourcesForItem(item: Item): SourceDefinition[] {
-  return sources.filter((source) => source.categories.includes(item.category));
+  const categorySources = sources.filter((source) =>
+    source.categories.includes(item.category)
+  );
+
+  if (item.category !== "tcg") {
+    return categorySources;
+  }
+
+  const platform = normalizePlatform(item.platform);
+
+  if (platform === "pokemon") {
+    return categorySources.filter((source) =>
+      [
+        "dungeon_marvels",
+        "pokemon_tcg_api",
+        "tcgdex",
+        "cardtrader"
+      ].includes(source.name)
+    );
+  }
+
+  if (platform === "yugioh") {
+    return categorySources.filter((source) =>
+      [
+        "dungeon_marvels",
+        "cardtrader"
+      ].includes(source.name)
+    );
+  }
+
+  if (platform === "magic") {
+    return categorySources.filter((source) =>
+      [
+        "dungeon_marvels",
+        "cardtrader"
+      ].includes(source.name)
+    );
+  }
+
+  if (platform === "onepiece") {
+    return categorySources.filter((source) =>
+      [
+        "dungeon_marvels",
+        "cardtrader"
+      ].includes(source.name)
+    );
+  }
+
+  if (platform === "lorcana") {
+    return categorySources.filter((source) =>
+      [
+        "dungeon_marvels",
+        "cardtrader"
+      ].includes(source.name)
+    );
+  }
+
+  if (platform === "digimon") {
+    return categorySources.filter((source) =>
+      [
+        "dungeon_marvels",
+        "cardtrader"
+      ].includes(source.name)
+    );
+  }
+
+  if (platform === "fleshandblood") {
+    return categorySources.filter((source) =>
+      [
+        "dungeon_marvels",
+        "cardtrader"
+      ].includes(source.name)
+    );
+  }
+
+  return categorySources;
+}
+
+function normalizePlatform(value: string | null): string | null {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+
+  if (!normalized) return null;
+
+  if (
+    normalized === "pokemon" ||
+    normalized === "pokemontcg" ||
+    normalized === "pokémon" ||
+    normalized === "pokémontcg"
+  ) {
+    return "pokemon";
+  }
+
+  if (
+    normalized === "yugioh" ||
+    normalized === "yu-gi-oh" ||
+    normalized === "yugi" ||
+    normalized === "yugiohtcg"
+  ) {
+    return "yugioh";
+  }
+
+  if (
+    normalized === "magic" ||
+    normalized === "mtg" ||
+    normalized === "magicthegathering"
+  ) {
+    return "magic";
+  }
+
+  if (
+    normalized === "onepiece" ||
+    normalized === "onepiecetcg" ||
+    normalized === "optcg"
+  ) {
+    return "onepiece";
+  }
+
+  if (
+    normalized === "lorcana" ||
+    normalized === "disneylorcana"
+  ) {
+    return "lorcana";
+  }
+
+  if (
+    normalized === "digimon" ||
+    normalized === "digimontcg"
+  ) {
+    return "digimon";
+  }
+
+  if (
+    normalized === "fleshandblood" ||
+    normalized === "fab"
+  ) {
+    return "fleshandblood";
+  }
+
+  return normalized;
 }
 
 function buildCacheKey(item: Item) {
@@ -201,6 +342,7 @@ async function scrapeValuation(item: Item): Promise<{
     name: item.name,
     category: item.category,
     platform: item.platform,
+    normalizedPlatform: normalizePlatform(item.platform),
     region: item.region
   });
 
