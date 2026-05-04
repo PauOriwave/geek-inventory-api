@@ -5,7 +5,9 @@ import { normalizeText, parseEuroPrice, similarityScore } from "../utils";
 
 type ParsedTcgQuery = {
   cleanName: string;
+  platform: string | null;
   setCode: string | null;
+  setName: string | null;
   cardNumber: string | null;
 };
 
@@ -59,21 +61,46 @@ const KNOWN_SET_ALIASES: Record<string, { name: string; total?: string }> = {
   POR: {
     name: "Perfect Order",
     total: "088"
+  },
+  SUDA: {
+    name: "Supreme Darkness"
   }
 };
 
+const YUGIOH_FALLBACK_SETS = [
+  "Supreme Darkness",
+  "Alliance Insight",
+  "Doom of Dimensions",
+  "The Infinite Forbidden",
+  "Legacy of Destruction",
+  "Phantom Nightmare",
+  "Age of Overlord",
+  "Duelist Nexus",
+  "Maze of the Master",
+  "OTS Tournament Pack 29",
+  "Legendary Modern Decks 2026"
+];
+
 const RARITY_SLUGS = [
-  "full-art",
+  "common",
+  "rare",
+  "super-rare",
   "ultra-rare",
+  "secret-rare",
+  "quarter-century-secret-rare",
+  "starlight-rare",
+  "collectors-rare",
+  "ultimate-rare",
+  "ghost-rare",
+  "parallel-rare",
+  "platinum-secret-rare",
+  "gold-rare",
+  "full-art",
   "special-illustration-rare",
   "illustration-rare",
-  "secret-rare",
   "double-rare",
   "triple-rare",
-  "rare",
   "holo-rare",
-  "super-rare",
-  "common",
   "uncommon"
 ];
 
@@ -117,12 +144,23 @@ export async function getCardTraderPrice(
     parsed
   });
 
-  const tcgdexCards = await resolveFromTcgDex(parsed);
-  const candidates = buildCardTraderCandidates(parsed, tcgdexCards);
+  const tcgdexCards = shouldUseTcgDex(parsed)
+    ? await resolveFromTcgDex(parsed)
+    : [];
+
+  const directCandidates = buildCardTraderCandidates(parsed, tcgdexCards);
+  const yugiohFallbackCandidates = buildYugiohFallbackCandidates(parsed);
+  const searchCandidates = await resolveFromCardTraderSearch(parsed);
+
+  const candidates = mergeCandidates([
+    ...directCandidates,
+    ...yugiohFallbackCandidates,
+    ...searchCandidates
+  ]);
 
   console.log(
     "🟧 CT candidates:",
-    candidates.slice(0, 12).map((candidate) => ({
+    candidates.slice(0, 20).map((candidate) => ({
       title: candidate.title,
       cardNumber: candidate.cardNumber,
       setName: candidate.setName,
@@ -147,7 +185,6 @@ export async function getCardTraderPrice(
     if (!html) continue;
 
     const detail = parseCardTraderDetail(html, candidate.url);
-
     if (!detail) continue;
 
     const confidence = computeConfidence(parsed, candidate, detail);
@@ -202,7 +239,10 @@ export async function getCardTraderPrice(
         extractedPrices: detail.extractedPrices,
         parsed,
         candidate,
-        tcgdexCandidates: tcgdexCards.slice(0, 10)
+        tcgdexCandidates: tcgdexCards.slice(0, 10),
+        directCandidates: directCandidates.slice(0, 10),
+        yugiohFallbackCandidates: yugiohFallbackCandidates.slice(0, 20),
+        searchCandidates: searchCandidates.slice(0, 10)
       }
     };
   }
@@ -224,7 +264,10 @@ export async function getCardTraderPrice(
         extractedPrices: bestNoPrice.detail.extractedPrices,
         parsed,
         candidate: bestNoPrice.candidate,
-        tcgdexCandidates: tcgdexCards.slice(0, 10)
+        tcgdexCandidates: tcgdexCards.slice(0, 10),
+        directCandidates: directCandidates.slice(0, 10),
+        yugiohFallbackCandidates: yugiohFallbackCandidates.slice(0, 20),
+        searchCandidates: searchCandidates.slice(0, 10)
       }
     };
   }
@@ -232,6 +275,11 @@ export async function getCardTraderPrice(
   console.log("🟧 CT no usable page found:", parsed);
 
   return null;
+}
+
+function shouldUseTcgDex(parsed: ParsedTcgQuery): boolean {
+  if (!parsed.platform) return true;
+  return parsed.platform === "pokemon";
 }
 
 async function resolveFromTcgDex(
@@ -256,6 +304,180 @@ async function resolveFromTcgDex(
     .slice(0, 12);
 }
 
+async function resolveFromCardTraderSearch(
+  parsed: ParsedTcgQuery
+): Promise<CardTraderCandidate[]> {
+  const searchQuery = buildCardTraderSearchQuery(parsed);
+  const encoded = encodeURIComponent(searchQuery);
+
+  const urls = [
+    `${CARDTRADER_BASE_URL}/en/cards?search=${encoded}`,
+    `${CARDTRADER_BASE_URL}/en/cards?query=${encoded}`,
+    `${CARDTRADER_BASE_URL}/en/search?query=${encoded}`,
+    `${CARDTRADER_BASE_URL}/en/search?search=${encoded}`
+  ];
+
+  const candidates: CardTraderCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const url of urls) {
+    console.log("🟧 CT Search:", url);
+
+    const html = await fetchHtml(url);
+    if (!html) continue;
+
+    const extracted = extractCardTraderSearchCandidates(html, parsed);
+
+    console.log(
+      "🟧 CT search candidates:",
+      extracted.slice(0, 8).map((candidate) => ({
+        title: candidate.title,
+        score: Number(candidate.score.toFixed(2)),
+        url: candidate.url
+      }))
+    );
+
+    for (const candidate of extracted) {
+      addCandidate(candidates, seen, candidate);
+    }
+
+    if (candidates.length > 0) break;
+  }
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 15);
+}
+
+function buildCardTraderSearchQuery(parsed: ParsedTcgQuery): string {
+  const parts = [
+    parsed.cleanName,
+    parsed.cardNumber,
+    parsed.setName,
+    parsed.setCode && !isGenericPlatformToken(parsed.setCode)
+      ? parsed.setCode
+      : null
+  ];
+
+  return parts
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildYugiohFallbackCandidates(
+  parsed: ParsedTcgQuery
+): CardTraderCandidate[] {
+  if (parsed.platform !== "yugioh") return [];
+
+  const candidates: CardTraderCandidate[] = [];
+  const seen = new Set<string>();
+
+  const nameSlug = slugify(parsed.cleanName);
+
+  const setNames = [
+    parsed.setName,
+    parsed.setCode && KNOWN_SET_ALIASES[parsed.setCode]
+      ? KNOWN_SET_ALIASES[parsed.setCode].name
+      : null,
+    ...YUGIOH_FALLBACK_SETS
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  const uniqueSetNames = [...new Set(setNames)];
+
+  const yugiohRarities = [
+    "common",
+    "rare",
+    "super-rare",
+    "ultra-rare",
+    "secret-rare",
+    "quarter-century-secret-rare",
+    "ultimate-rare",
+    "collector-rare",
+    "collectors-rare",
+    "starlight-rare",
+    "ghost-rare"
+  ];
+
+  for (const setName of uniqueSetNames) {
+    const setSlug = slugify(setName);
+
+    for (const rarity of yugiohRarities) {
+      const url = `${CARDTRADER_BASE_URL}/en/cards/${nameSlug}-${rarity}-${setSlug}`;
+
+      addCandidate(candidates, seen, {
+        title: `${parsed.cleanName} - ${rarity} - ${setName}`,
+        url,
+        cardNumber: parsed.cardNumber,
+        setName,
+        rarity,
+        score: scoreCandidate(parsed, {
+          title: parsed.cleanName,
+          cardNumber: parsed.cardNumber,
+          setName
+        }) + 0.25
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 40);
+}
+
+function extractCardTraderSearchCandidates(
+  html: string,
+  parsed: ParsedTcgQuery
+): CardTraderCandidate[] {
+  const $ = cheerio.load(html);
+  const candidates: CardTraderCandidate[] = [];
+  const seen = new Set<string>();
+
+  $("a[href]").each((_, el) => {
+    const link = $(el);
+    const href = decodeHtml(link.attr("href") || "");
+    const url = absolutizeCardTrader(href);
+
+    if (!url.includes("/en/cards/")) return;
+
+    const rawTitle =
+      cleanTitle(link.text()) ||
+      cleanTitle(link.attr("title") || "") ||
+      cleanTitle(link.closest("article, li, div, tr, section").text()) ||
+      titleFromUrl(url);
+
+    const title = normalizeSearchTitle(rawTitle, url);
+    const score = scoreSearchCandidate(parsed, title, url);
+
+    if (score < 0.45) return;
+
+    addCandidate(candidates, seen, {
+      title,
+      url,
+      cardNumber: extractCardNumberFromText(`${title} ${url}`),
+      setName: extractSetNameFromTitle(title) || extractSetNameFromUrl(url),
+      rarity: extractRarityFromUrl(url),
+      score
+    });
+  });
+
+  extractRawCardTraderUrls(html).forEach((url) => {
+    const title = titleFromUrl(url);
+    const score = scoreSearchCandidate(parsed, title, url);
+
+    if (score < 0.45) return;
+
+    addCandidate(candidates, seen, {
+      title,
+      url,
+      cardNumber: extractCardNumberFromText(`${title} ${url}`),
+      setName: extractSetNameFromTitle(title) || extractSetNameFromUrl(url),
+      rarity: extractRarityFromUrl(url),
+      score
+    });
+  });
+
+  return candidates.sort((a, b) => b.score - a.score);
+}
+
 function buildCardTraderCandidates(
   parsed: ParsedTcgQuery,
   tcgdexCards: TcgDexCard[]
@@ -268,27 +490,27 @@ function buildCardTraderCandidates(
   const baseCards =
     tcgdexCards.length > 0
       ? tcgdexCards
-      : [
-          {
-            name: parsed.cleanName,
-            localId: parsed.cardNumber ?? undefined,
-            set: knownSet
-              ? {
-                  name: knownSet.name,
-                  cardCount: {
-                    official: knownSet.total
-                      ? Number(knownSet.total)
-                      : undefined
-                  }
+      : knownSet && parsed.cardNumber
+        ? [
+            {
+              name: parsed.cleanName,
+              localId: parsed.cardNumber,
+              set: {
+                name: knownSet.name,
+                cardCount: {
+                  official: knownSet.total
+                    ? Number(knownSet.total)
+                    : undefined
                 }
-              : undefined
-          }
-        ];
+              }
+            }
+          ]
+        : [];
 
   for (const card of baseCards) {
     const name = card.name || parsed.cleanName;
     const localId = normalizeCardNumber(card.localId || parsed.cardNumber || "");
-    const setName = card.set?.name || knownSet?.name || null;
+    const setName = card.set?.name || knownSet?.name || parsed.setName || null;
 
     if (!name || !localId || !setName) continue;
 
@@ -329,6 +551,13 @@ function buildRaritySlugs(rarity?: string): string[] {
   const slugs = new Set<string>();
   const normalized = normalizeText(rarity || "");
 
+  if (normalized.includes("quarter")) slugs.add("quarter-century-secret-rare");
+  if (normalized.includes("secret")) slugs.add("secret-rare");
+  if (normalized.includes("starlight")) slugs.add("starlight-rare");
+  if (normalized.includes("collector")) slugs.add("collectors-rare");
+  if (normalized.includes("ultimate")) slugs.add("ultimate-rare");
+  if (normalized.includes("ghost")) slugs.add("ghost-rare");
+
   if (normalized.includes("special") && normalized.includes("illustration")) {
     slugs.add("special-illustration-rare");
   }
@@ -337,17 +566,10 @@ function buildRaritySlugs(rarity?: string): string[] {
     slugs.add("illustration-rare");
   }
 
-  if (normalized.includes("ultra")) {
-    slugs.add("ultra-rare");
-  }
-
-  if (normalized.includes("double")) {
-    slugs.add("double-rare");
-  }
-
-  if (normalized.includes("rare")) {
-    slugs.add("rare");
-  }
+  if (normalized.includes("ultra")) slugs.add("ultra-rare");
+  if (normalized.includes("super")) slugs.add("super-rare");
+  if (normalized.includes("double")) slugs.add("double-rare");
+  if (normalized.includes("rare")) slugs.add("rare");
 
   for (const slug of RARITY_SLUGS) {
     slugs.add(slug);
@@ -617,7 +839,7 @@ function getPriceBasisPriority(basis: string): number {
   if (normalized.includes("cardtrader.offer.price")) return 88;
   if (normalized.includes("marketprice")) return 85;
   if (normalized.includes("market_price")) return 85;
-  if (normalized.includes("mindprice")) return 80;
+  if (normalized.includes("minprice")) return 80;
   if (normalized.includes("min_price")) return 80;
   if (normalized.includes("json")) return 70;
   if (normalized.includes("dom")) return 60;
@@ -841,7 +1063,7 @@ async function fetchJson<T>(url: string): Promise<T | null> {
 
 function parseTcgQuery(item: Item): ParsedTcgQuery {
   const rawName = String(item.name || "").trim();
-  const platform = String(item.platform || "").trim();
+  const platform = normalizePlatform(item.platform);
   const region = String(item.region || "").trim();
 
   const parenthesisMatch = rawName.match(/\(([^)]+)\)/);
@@ -852,14 +1074,35 @@ function parseTcgQuery(item: Item): ParsedTcgQuery {
     .map((part) => part.trim())
     .filter(Boolean);
 
-  const setCode =
-    platform ||
-    parts.find((part) => /^[A-Z0-9]{2,8}$/i.test(part)) ||
-    null;
+  const parenthesisSetCode =
+    parts.find(
+      (part) =>
+        /^[A-Z0-9]{2,12}$/i.test(part) &&
+        !/^\d+[a-zA-Z]?\/?\d*[a-zA-Z]?$/i.test(part) &&
+        !isGenericPlatformToken(part)
+    ) ?? null;
+
+  const regionIsCardNumber =
+    /^\d+[a-zA-Z]?\/?\d*[a-zA-Z]?$/i.test(region);
+
+  const regionAsSetName =
+    region &&
+    !regionIsCardNumber &&
+    !isGenericPlatformToken(region)
+      ? region
+      : null;
+
+  const knownSetFromParenthesis =
+    parenthesisSetCode && KNOWN_SET_ALIASES[normalizeSetCode(parenthesisSetCode)]
+      ? KNOWN_SET_ALIASES[normalizeSetCode(parenthesisSetCode)].name
+      : null;
+
+  const setCode = parenthesisSetCode || null;
+  const setName = regionAsSetName || knownSetFromParenthesis || null;
 
   const cardNumber =
-    region ||
     parts.find((part) => /^\d+[a-zA-Z]?\/?\d*[a-zA-Z]?$/.test(part)) ||
+    (regionIsCardNumber ? region : null) ||
     rawName.match(/\b(\d+[a-zA-Z]?\/?\d*[a-zA-Z]?)\b/)?.[1] ||
     null;
 
@@ -871,9 +1114,75 @@ function parseTcgQuery(item: Item): ParsedTcgQuery {
 
   return {
     cleanName: cleanName || rawName,
+    platform,
     setCode: setCode ? normalizeSetCode(setCode) : null,
+    setName,
     cardNumber: cardNumber ? normalizeCardNumber(cardNumber) : null
   };
+}
+
+function normalizePlatform(value: string | null): string | null {
+  const normalized = normalizeText(String(value || ""))
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+
+  if (!normalized) return null;
+
+  if (normalized === "pokemon" || normalized === "pokemontcg") {
+    return "pokemon";
+  }
+
+  if (
+    normalized === "yugioh" ||
+    normalized === "yugiohtcg" ||
+    normalized === "yugi"
+  ) {
+    return "yugioh";
+  }
+
+  if (
+    normalized === "magic" ||
+    normalized === "mtg" ||
+    normalized === "magicthegathering"
+  ) {
+    return "magic";
+  }
+
+  if (
+    normalized === "onepiece" ||
+    normalized === "onepiecetcg" ||
+    normalized === "optcg"
+  ) {
+    return "onepiece";
+  }
+
+  if (normalized === "lorcana" || normalized === "disneylorcana") {
+    return "lorcana";
+  }
+
+  if (normalized === "digimon" || normalized === "digimontcg") {
+    return "digimon";
+  }
+
+  if (normalized === "fleshandblood" || normalized === "fab") {
+    return "fleshandblood";
+  }
+
+  return normalized;
+}
+
+function isGenericPlatformToken(value: string): boolean {
+  const normalized = normalizePlatform(value);
+
+  return [
+    "pokemon",
+    "yugioh",
+    "magic",
+    "onepiece",
+    "lorcana",
+    "digimon",
+    "fleshandblood"
+  ].includes(normalized || "");
 }
 
 function scoreTcgDexCard(parsed: ParsedTcgQuery, card: TcgDexCard): number {
@@ -923,6 +1232,14 @@ function scoreCandidate(
     score += 0.8;
   }
 
+  if (
+    parsed.setName &&
+    candidate.setName &&
+    normalizeText(candidate.setName).includes(normalizeText(parsed.setName))
+  ) {
+    score += 0.5;
+  }
+
   if (parsed.setCode) {
     const knownSet = KNOWN_SET_ALIASES[parsed.setCode];
     if (
@@ -935,6 +1252,60 @@ function scoreCandidate(
   }
 
   return score;
+}
+
+function scoreSearchCandidate(
+  parsed: ParsedTcgQuery,
+  title: string,
+  url: string
+): number {
+  let score = 0;
+
+  const wanted = normalizeText(parsed.cleanName);
+  const normalizedTitle = normalizeText(title);
+  const normalizedUrl = normalizeText(url).replace(/\s+/g, "-");
+
+  score += similarityScore(wanted, normalizedTitle);
+
+  if (normalizedTitle.includes(wanted)) score += 0.7;
+  if (normalizedUrl.includes(wanted.replace(/\s+/g, "-"))) score += 0.6;
+
+  const wantedTokens = wanted
+    .split(" ")
+    .filter((token) => token.length > 2);
+
+  const matchedTokens = wantedTokens.filter(
+    (token) =>
+      normalizedTitle.includes(token) ||
+      normalizedUrl.includes(token)
+  );
+
+  if (wantedTokens.length > 0) {
+    score += (matchedTokens.length / wantedTokens.length) * 0.8;
+  }
+
+  if (
+    parsed.cardNumber &&
+    normalizeCardNumber(`${title} ${url}`).includes(parsed.cardNumber)
+  ) {
+    score += 0.5;
+  }
+
+  if (
+    parsed.setName &&
+    normalizeText(`${title} ${url}`).includes(normalizeText(parsed.setName))
+  ) {
+    score += 0.35;
+  }
+
+  if (
+    parsed.setCode &&
+    normalizeText(`${title} ${url}`).includes(normalizeText(parsed.setCode))
+  ) {
+    score += 0.25;
+  }
+
+  return Number(score.toFixed(4));
 }
 
 function computeConfidence(
@@ -958,6 +1329,14 @@ function computeConfidence(
     confidence += 0.15;
   }
 
+  if (
+    parsed.setName &&
+    candidate.setName &&
+    normalizeText(candidate.setName).includes(normalizeText(parsed.setName))
+  ) {
+    confidence += 0.08;
+  }
+
   if (detail.priceBasis === "cardtrader.offer.price") {
     confidence += 0.08;
   }
@@ -977,12 +1356,31 @@ function isDetailCompatible(
   const normalizedTitle = normalizeText(detail.title);
   const normalizedName = normalizeText(parsed.cleanName);
 
-  if (!normalizedTitle.includes(normalizedName)) return false;
+  const wantedTokens = normalizedName
+    .split(" ")
+    .filter((token) => token.length > 2);
+
+  const matchedTokens = wantedTokens.filter((token) =>
+    normalizedTitle.includes(token)
+  );
+
+  if (wantedTokens.length > 0 && matchedTokens.length / wantedTokens.length < 0.7) {
+    return false;
+  }
 
   if (
     parsed.cardNumber &&
     candidate.cardNumber &&
     normalizeCardNumber(candidate.cardNumber) !== parsed.cardNumber
+  ) {
+    return false;
+  }
+
+  if (
+    parsed.setName &&
+    candidate.setName &&
+    !normalizeText(candidate.setName).includes(normalizeText(parsed.setName)) &&
+    !normalizeText(detail.url).includes(normalizeText(parsed.setName).replace(/\s+/g, ""))
   ) {
     return false;
   }
@@ -1001,6 +1399,19 @@ function addCandidate(
   seen.add(candidate.url);
 
   candidates.push(candidate);
+}
+
+function mergeCandidates(
+  candidates: CardTraderCandidate[]
+): CardTraderCandidate[] {
+  const seen = new Set<string>();
+  const merged: CardTraderCandidate[] = [];
+
+  for (const candidate of candidates.sort((a, b) => b.score - a.score)) {
+    addCandidate(merged, seen, candidate);
+  }
+
+  return merged;
 }
 
 function parseCardPrice(value: string | null | undefined): number | null {
@@ -1049,6 +1460,62 @@ function isBadPriceContext(value: string): boolean {
   ];
 
   return badTokens.some((token) => normalized.includes(token));
+}
+
+function extractRawCardTraderUrls(html: string): string[] {
+  const decoded = decodeHtml(html)
+    .replace(/\\u002F/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/%2F/gi, "/");
+
+  const matches = [
+    ...decoded.matchAll(
+      /https?:\/\/www\.cardtrader\.com\/en\/cards\/[^"'<>\\\s]+/gi
+    ),
+    ...decoded.matchAll(/\/en\/cards\/[^"'<>\\\s]+/gi)
+  ];
+
+  return matches.map((match) => absolutizeCardTrader(match[0]));
+}
+
+function normalizeSearchTitle(title: string, url: string): string {
+  const cleaned = cleanTitle(title);
+
+  if (cleaned && cleaned.length >= 4) return cleaned;
+
+  return titleFromUrl(url);
+}
+
+function extractCardNumberFromText(value: string): string | null {
+  const match =
+    value.match(/#\s*([A-Za-z0-9]+)\b/) ||
+    value.match(/\b(\d{1,4})\/\d{1,4}\b/) ||
+    value.match(/\b([A-Z]{1,5}\d{1,4})\b/i);
+
+  return match?.[1] ? normalizeCardNumber(match[1]) : null;
+}
+
+function extractSetNameFromTitle(title: string): string | null {
+  const parts = title.split("-").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : null;
+}
+
+function extractSetNameFromUrl(url: string): string | null {
+  const title = titleFromUrl(url);
+  const rarity = extractRarityFromUrl(url);
+
+  if (!rarity) return null;
+
+  const parts = title.split(rarity.replace(/-/g, " "));
+  const tail = parts[1]?.trim();
+
+  return tail || null;
+}
+
+function extractRarityFromUrl(url: string): string | null {
+  const normalized = normalizeText(url).replace(/\s+/g, "-");
+
+  return RARITY_SLUGS.find((slug) => normalized.includes(slug)) ?? null;
 }
 
 function getMatchContext(text: string, index: number, size: number): string {
@@ -1105,6 +1572,23 @@ function titleFromUrl(url: string): string {
   } catch {
     return "";
   }
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#039;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function absolutizeCardTrader(href: string): string {
+  if (!href) return "";
+  if (href.startsWith("http://") || href.startsWith("https://")) return href;
+  if (href.startsWith("//")) return `https:${href}`;
+  if (href.startsWith("/")) return `${CARDTRADER_BASE_URL}${href}`;
+  return `${CARDTRADER_BASE_URL}/${href}`;
 }
 
 function safeJsonParse(value: string): unknown | null {
