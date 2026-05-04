@@ -20,6 +20,35 @@ const SUPPORTED_CATEGORIES = new Set([
   "lego"
 ]);
 
+const TCG_MERCH_TOKENS = [
+  "squaroes",
+  "squaroe",
+  "sleeves",
+  "sleeve",
+  "fundas",
+  "deck box",
+  "deckbox",
+  "playmat",
+  "tapete",
+  "binder",
+  "album",
+  "portfolio",
+  "booster",
+  "display",
+  "bundle",
+  "starter",
+  "structure deck",
+  "figura",
+  "funko",
+  "pop!",
+  "poster",
+  "mug",
+  "taza",
+  "llavero",
+  "accesorio",
+  "accessory"
+];
+
 export async function getDungeonMarvelsPrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
@@ -84,11 +113,23 @@ export async function getDungeonMarvelsPrice(
 
     return {
       price: Number(finalPrice.toFixed(2)),
+      currency: "EUR",
       source: "dungeon_marvels",
       confidence,
       matchedTitle,
       matchedUrl: best.url,
-      query
+      query,
+      metadata: {
+        provider: "dungeon_marvels",
+        currency: "EUR",
+        listingPrice: best.price,
+        detailPrice,
+        finalPrice,
+        category: item.category,
+        platform: item.platform ?? null,
+        antiMerchProtected: item.category === "tcg",
+        url: best.url
+      }
     };
   }
 
@@ -376,6 +417,10 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
     const title = normalizeSearchText(candidate.title);
     const url = normalizeSearchText(candidate.url);
 
+    if (item.category === "tcg" && isLikelyTcgMerch(candidate.title, candidate.url)) {
+      return false;
+    }
+
     return importantTokens.every(
       (token) => title.includes(token) || url.includes(token)
     );
@@ -394,6 +439,10 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
     if (title.includes(wanted)) score += 0.3;
     if (url.includes(wanted.replace(/\s+/g, "-"))) score += 0.2;
     if (candidate.price != null && candidate.price > 0) score += 0.05;
+
+    if (item.category === "tcg") {
+      score -= getTcgMerchPenalty(candidate.title, candidate.url);
+    }
 
     return {
       candidate,
@@ -509,7 +558,10 @@ function getImportantTokens(normalizedText: string): string[] {
     "para",
     "con",
     "sin",
-    "the"
+    "the",
+    "tcg",
+    "card",
+    "carta"
   ]);
 
   return normalizedText
@@ -528,6 +580,18 @@ function normalizeSearchText(value: string): string {
     .replace(/\bespanol\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isLikelyTcgMerch(title: string, url: string): boolean {
+  const normalized = normalizeSearchText(`${title} ${url}`);
+
+  return TCG_MERCH_TOKENS.some((token) =>
+    normalized.includes(normalizeSearchText(token))
+  );
+}
+
+function getTcgMerchPenalty(title: string, url: string): number {
+  return isLikelyTcgMerch(title, url) ? 0.8 : 0;
 }
 
 function cleanQuery(value: string): string {
@@ -616,6 +680,10 @@ function computeConfidence(item: Item, matchedTitle: string): number {
   let confidence = 0.45 + similarityScore(wanted, matched) * 0.45;
 
   if (matched.includes(wanted)) confidence += 0.05;
+
+  if (item.category === "tcg" && isLikelyTcgMerch(matchedTitle, "")) {
+    confidence -= 0.25;
+  }
 
   return Math.max(0.2, Math.min(0.92, Number(confidence.toFixed(2))));
 }

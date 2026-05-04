@@ -9,19 +9,22 @@ import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
 import { getPokemonTcgPrice } from "./sources/pokemon-tcg.source";
 import { getTcgDexPrice } from "./sources/tcgdex.source";
 import { getCardTraderPrice } from "./sources/cardtrader.source";
+import { getScryfallPrice } from "./sources/scryfall.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
 
 import {
   ScraperAttemptLog,
-  ScraperSourceResult
+  ScraperSourceResult,
+  SupportedCurrency
 } from "./scraper.types";
 
 type ValuationResult = {
   price: number;
   source: string;
   confidence: number;
+  currency?: SupportedCurrency | null;
 };
 
 type SourceDefinition = {
@@ -33,6 +36,7 @@ type SourceDefinition = {
 
 const MIN_CONFIDENCE_FOR_VALUATION = 0.5;
 const HIGH_CONFIDENCE_THRESHOLD = 0.88;
+const TCG_DUNGEON_MARVELS_MIN_CONFIDENCE = 0.8;
 
 const sources: SourceDefinition[] = [
   {
@@ -96,6 +100,12 @@ const sources: SourceDefinition[] = [
     handler: getTcgDexPrice
   },
   {
+    name: "scryfall",
+    priority: 98,
+    categories: ["tcg"],
+    handler: getScryfallPrice
+  },
+  {
     name: "cardtrader",
     priority: 96,
     categories: ["tcg"],
@@ -119,10 +129,10 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (platform === "pokemon") {
     return categorySources.filter((source) =>
       [
-        "dungeon_marvels",
         "pokemon_tcg_api",
         "tcgdex",
-        "cardtrader"
+        "cardtrader",
+        "dungeon_marvels"
       ].includes(source.name)
     );
   }
@@ -130,8 +140,8 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (platform === "yugioh") {
     return categorySources.filter((source) =>
       [
-        "dungeon_marvels",
-        "cardtrader"
+        "cardtrader",
+        "dungeon_marvels"
       ].includes(source.name)
     );
   }
@@ -139,8 +149,9 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (platform === "magic") {
     return categorySources.filter((source) =>
       [
-        "dungeon_marvels",
-        "cardtrader"
+        "scryfall",
+        "cardtrader",
+        "dungeon_marvels"
       ].includes(source.name)
     );
   }
@@ -148,8 +159,8 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (platform === "onepiece") {
     return categorySources.filter((source) =>
       [
-        "dungeon_marvels",
-        "cardtrader"
+        "cardtrader",
+        "dungeon_marvels"
       ].includes(source.name)
     );
   }
@@ -157,8 +168,8 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (platform === "lorcana") {
     return categorySources.filter((source) =>
       [
-        "dungeon_marvels",
-        "cardtrader"
+        "cardtrader",
+        "dungeon_marvels"
       ].includes(source.name)
     );
   }
@@ -166,8 +177,8 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (platform === "digimon") {
     return categorySources.filter((source) =>
       [
-        "dungeon_marvels",
-        "cardtrader"
+        "cardtrader",
+        "dungeon_marvels"
       ].includes(source.name)
     );
   }
@@ -175,8 +186,8 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (platform === "fleshandblood") {
     return categorySources.filter((source) =>
       [
-        "dungeon_marvels",
-        "cardtrader"
+        "cardtrader",
+        "dungeon_marvels"
       ].includes(source.name)
     );
   }
@@ -315,6 +326,7 @@ async function saveSourceMarketData(
         sourceUrl: result.matchedUrl ?? null,
         rawData: toPrismaJson({
           price: result.price,
+          currency: result.currency ?? null,
           confidence: result.confidence,
           matchedTitle: result.matchedTitle ?? null,
           matchedUrl: result.matchedUrl ?? null,
@@ -379,6 +391,7 @@ async function scrapeValuation(item: Item): Promise<{
         source: source.name,
         hasResult: Boolean(result),
         price: result?.price,
+        currency: result?.currency,
         confidence: result?.confidence,
         matchedTitle: result?.matchedTitle
       });
@@ -417,6 +430,7 @@ async function scrapeValuation(item: Item): Promise<{
           matchedUrl: result?.matchedUrl,
           matchedPrice:
             result?.price && result.price > 0 ? result.price : undefined,
+          currency: result?.currency ?? null,
           confidence: result?.confidence
         });
         continue;
@@ -429,14 +443,19 @@ async function scrapeValuation(item: Item): Promise<{
         matchedTitle: result.matchedTitle,
         matchedUrl: result.matchedUrl,
         matchedPrice: result.price,
+        currency: result.currency ?? null,
         confidence: result.confidence
       });
 
-      if (result.confidence < MIN_CONFIDENCE_FOR_VALUATION) {
+      const requiredConfidence = getMinimumConfidenceForResult(item, result);
+
+      if (result.confidence < requiredConfidence) {
         console.log("[valuation] Ignoring low confidence result:", {
           source: result.source,
           price: result.price,
+          currency: result.currency,
           confidence: result.confidence,
+          requiredConfidence,
           matchedTitle: result.matchedTitle
         });
 
@@ -474,6 +493,7 @@ async function scrapeValuation(item: Item): Promise<{
       return {
         valuation: {
           price: Number(highConfidenceBest.price.toFixed(2)),
+          currency: highConfidenceBest.currency ?? null,
           source: highConfidenceBest.source,
           confidence: Number(
             Math.min(0.95, highConfidenceBest.confidence).toFixed(2)
@@ -494,6 +514,17 @@ async function scrapeValuation(item: Item): Promise<{
     validResults: valid,
     marketDataResults
   };
+}
+
+function getMinimumConfidenceForResult(
+  item: Item,
+  result: ScraperSourceResult
+): number {
+  if (item.category === "tcg" && result.source === "dungeon_marvels") {
+    return TCG_DUNGEON_MARVELS_MIN_CONFIDENCE;
+  }
+
+  return MIN_CONFIDENCE_FOR_VALUATION;
 }
 
 function pickHighConfidenceBest(
@@ -523,6 +554,7 @@ function pickHighConfidenceBest(
   console.log("[valuation] Using high confidence source:", {
     source: best.source,
     price: best.price,
+    currency: best.currency,
     confidence: best.confidence,
     matchedTitle: best.matchedTitle
   });
@@ -533,7 +565,9 @@ function pickHighConfidenceBest(
 function calculateWeightedValuation(
   results: ScraperSourceResult[]
 ): ValuationResult | null {
-  const weightedResults = results.map((result) => {
+  const compatibleResults = filterCurrencyCompatibleResults(results);
+
+  const weightedResults = compatibleResults.map((result) => {
     const priority = getSourcePriority(result.source);
     const weight = result.confidence * priority;
 
@@ -564,17 +598,49 @@ function calculateWeightedValuation(
     weightedResults.reduce((acc, entry) => acc + entry.result.confidence, 0) /
     weightedResults.length;
 
+  const currency = weightedResults[0]?.result.currency ?? null;
+
   console.log("[valuation] Using weighted valuation:", {
     sources: mergedSources,
     price: Number(weightedPrice.toFixed(2)),
+    currency,
     confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
   });
 
   return {
     price: Number(weightedPrice.toFixed(2)),
+    currency,
     source: mergedSources,
     confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
   };
+}
+
+function filterCurrencyCompatibleResults(
+  results: ScraperSourceResult[]
+): ScraperSourceResult[] {
+  const withCurrency = results.filter((result) => result.currency);
+  const withoutCurrency = results.filter((result) => !result.currency);
+
+  if (withCurrency.length === 0) return results;
+
+  const currencyScores = new Map<SupportedCurrency, number>();
+
+  for (const result of withCurrency) {
+    const currency = result.currency as SupportedCurrency;
+    const current = currencyScores.get(currency) ?? 0;
+    currencyScores.set(currency, current + result.confidence * getSourcePriority(result.source));
+  }
+
+  const preferredCurrency = [...currencyScores.entries()].sort(
+    (a, b) => b[1] - a[1]
+  )[0]?.[0];
+
+  if (!preferredCurrency) return results;
+
+  return [
+    ...withCurrency.filter((result) => result.currency === preferredCurrency),
+    ...withoutCurrency
+  ];
 }
 
 function getSourcePriority(sourceName: string): number {
@@ -660,6 +726,13 @@ export async function refreshValuation(
       }
     })
   ]);
+
+  console.log("[valuation] Updated:", {
+    itemId: item.id,
+    price: valuation.price,
+    currency: valuation.currency,
+    source: valuation.source
+  });
 
   return valuation;
 }
