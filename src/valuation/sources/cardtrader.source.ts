@@ -27,6 +27,19 @@ type TcgDexCard = {
   };
 };
 
+type ScryfallSearchResponse = {
+  data?: ScryfallCard[];
+};
+
+type ScryfallCard = {
+  id?: string;
+  name?: string;
+  set?: string;
+  set_name?: string;
+  collector_number?: string;
+  rarity?: string;
+};
+
 type CardTraderCandidate = {
   title: string;
   url: string;
@@ -44,6 +57,7 @@ type CardTraderDetail = {
   currency: "EUR" | "USD" | "GBP" | null;
   rawPriceText: string | null;
   extractedPrices: ExtractedPrice[];
+  marketMetrics: CardTraderMarketMetrics;
 };
 
 type ExtractedPrice = {
@@ -53,8 +67,17 @@ type ExtractedPrice = {
   context: string;
 };
 
+type CardTraderMarketMetrics = {
+  bestDeal: number | null;
+  ctMinPrice: number | null;
+  ctMarketPrice: number | null;
+  usMarketPrice: number | null;
+  currency: "EUR" | "USD" | "GBP" | null;
+};
+
 const CARDTRADER_BASE_URL = "https://www.cardtrader.com";
 const TCGDEX_BASE_URL = "https://api.tcgdex.net/v2/en";
+const SCRYFALL_BASE_URL = "https://api.scryfall.com";
 const REQUEST_TIMEOUT_MS = 15000;
 
 const KNOWN_SET_ALIASES: Record<string, { name: string; total?: string }> = {
@@ -64,6 +87,10 @@ const KNOWN_SET_ALIASES: Record<string, { name: string; total?: string }> = {
   },
   SUDA: {
     name: "Supreme Darkness"
+  },
+  SOS: {
+    name: "Secrets of Strixhaven",
+    total: "276"
   }
 };
 
@@ -90,11 +117,13 @@ const RARITY_SLUGS = [
   "quarter-century-secret-rare",
   "starlight-rare",
   "collectors-rare",
+  "collector-rare",
   "ultimate-rare",
   "ghost-rare",
   "parallel-rare",
   "platinum-secret-rare",
   "gold-rare",
+  "mythic-rare",
   "full-art",
   "special-illustration-rare",
   "illustration-rare",
@@ -102,6 +131,13 @@ const RARITY_SLUGS = [
   "triple-rare",
   "holo-rare",
   "uncommon"
+];
+
+const MAGIC_RARITY_SLUGS = [
+  "mythic-rare",
+  "rare",
+  "uncommon",
+  "common"
 ];
 
 const TRUSTED_PRICE_LABELS = [
@@ -148,11 +184,18 @@ export async function getCardTraderPrice(
     ? await resolveFromTcgDex(parsed)
     : [];
 
+  const scryfallCards =
+    parsed.platform === "magic"
+      ? await resolveFromScryfall(parsed)
+      : [];
+
   const directCandidates = buildCardTraderCandidates(parsed, tcgdexCards);
+  const magicCandidates = buildMagicCandidates(parsed, scryfallCards);
   const yugiohFallbackCandidates = buildYugiohFallbackCandidates(parsed);
   const searchCandidates = await resolveFromCardTraderSearch(parsed);
 
   const candidates = mergeCandidates([
+    ...magicCandidates,
     ...directCandidates,
     ...yugiohFallbackCandidates,
     ...searchCandidates
@@ -160,7 +203,7 @@ export async function getCardTraderPrice(
 
   console.log(
     "🟧 CT candidates:",
-    candidates.slice(0, 20).map((candidate) => ({
+    candidates.slice(0, 30).map((candidate) => ({
       title: candidate.title,
       cardNumber: candidate.cardNumber,
       setName: candidate.setName,
@@ -188,7 +231,7 @@ export async function getCardTraderPrice(
     if (!detail) continue;
 
     const confidence = computeConfidence(parsed, candidate, detail);
-    const currency = detail.currency ?? "USD";
+    const currency = detail.currency ?? detail.marketMetrics.currency ?? "EUR";
 
     console.log("🟧 CT parsed:", {
       title: detail.title,
@@ -196,6 +239,7 @@ export async function getCardTraderPrice(
       priceBasis: detail.priceBasis,
       currency,
       rawPriceText: detail.rawPriceText,
+      marketMetrics: detail.marketMetrics,
       extractedPrices: detail.extractedPrices.slice(0, 8),
       confidence,
       url: detail.url
@@ -238,15 +282,26 @@ export async function getCardTraderPrice(
       metadata: {
         provider: "cardtrader",
         hasPrice: true,
+
         priceBasis: detail.priceBasis,
         currency,
         originalCurrency: currency,
+
+        bestDeal: detail.marketMetrics.bestDeal,
+        ctMinPrice: detail.marketMetrics.ctMinPrice,
+        ctMarketPrice: detail.marketMetrics.ctMarketPrice,
+        usMarketPrice: detail.marketMetrics.usMarketPrice,
+        marketMetrics: detail.marketMetrics,
+
         rawPriceText: detail.rawPriceText,
         extractedPrices: detail.extractedPrices,
+
         parsed,
         candidate,
         tcgdexCandidates: tcgdexCards.slice(0, 10),
+        scryfallCandidates: scryfallCards.slice(0, 10),
         directCandidates: directCandidates.slice(0, 10),
+        magicCandidates: magicCandidates.slice(0, 20),
         yugiohFallbackCandidates: yugiohFallbackCandidates.slice(0, 20),
         searchCandidates: searchCandidates.slice(0, 10)
       }
@@ -254,7 +309,10 @@ export async function getCardTraderPrice(
   }
 
   if (bestNoPrice) {
-    const currency = bestNoPrice.detail.currency ?? "USD";
+    const currency =
+      bestNoPrice.detail.currency ??
+      bestNoPrice.detail.marketMetrics.currency ??
+      "EUR";
 
     return {
       price: 0,
@@ -267,15 +325,26 @@ export async function getCardTraderPrice(
       metadata: {
         provider: "cardtrader",
         hasPrice: false,
+
         priceBasis: bestNoPrice.detail.priceBasis,
         currency,
         originalCurrency: currency,
+
+        bestDeal: bestNoPrice.detail.marketMetrics.bestDeal,
+        ctMinPrice: bestNoPrice.detail.marketMetrics.ctMinPrice,
+        ctMarketPrice: bestNoPrice.detail.marketMetrics.ctMarketPrice,
+        usMarketPrice: bestNoPrice.detail.marketMetrics.usMarketPrice,
+        marketMetrics: bestNoPrice.detail.marketMetrics,
+
         rawPriceText: bestNoPrice.detail.rawPriceText,
         extractedPrices: bestNoPrice.detail.extractedPrices,
+
         parsed,
         candidate: bestNoPrice.candidate,
         tcgdexCandidates: tcgdexCards.slice(0, 10),
+        scryfallCandidates: scryfallCards.slice(0, 10),
         directCandidates: directCandidates.slice(0, 10),
+        magicCandidates: magicCandidates.slice(0, 20),
         yugiohFallbackCandidates: yugiohFallbackCandidates.slice(0, 20),
         searchCandidates: searchCandidates.slice(0, 10)
       }
@@ -314,6 +383,60 @@ async function resolveFromTcgDex(
     .slice(0, 12);
 }
 
+async function resolveFromScryfall(
+  parsed: ParsedTcgQuery
+): Promise<ScryfallCard[]> {
+  const queries = buildScryfallQueries(parsed);
+  const cards: ScryfallCard[] = [];
+  const seen = new Set<string>();
+
+  for (const query of queries) {
+    const url = `${SCRYFALL_BASE_URL}/cards/search?q=${encodeURIComponent(
+      query
+    )}&unique=prints&order=released`;
+
+    console.log("🟧 CT resolving Magic identity from Scryfall:", {
+      query,
+      url
+    });
+
+    const response = await fetchJson<ScryfallSearchResponse>(url);
+
+    for (const card of response?.data ?? []) {
+      if (!card.id || seen.has(card.id)) continue;
+
+      seen.add(card.id);
+      cards.push(card);
+    }
+
+    if (cards.length > 0 && (parsed.cardNumber || parsed.setCode)) break;
+  }
+
+  return cards.slice(0, 15);
+}
+
+function buildScryfallQueries(parsed: ParsedTcgQuery): string[] {
+  const name = escapeScryfallValue(parsed.cleanName);
+  const queries: string[] = [];
+
+  if (parsed.cardNumber && parsed.setCode) {
+    queries.push(`!"${name}" set:${parsed.setCode.toLowerCase()} cn:${parsed.cardNumber}`);
+  }
+
+  if (parsed.setCode) {
+    queries.push(`!"${name}" set:${parsed.setCode.toLowerCase()}`);
+  }
+
+  if (parsed.cardNumber) {
+    queries.push(`!"${name}" cn:${parsed.cardNumber}`);
+  }
+
+  queries.push(`!"${name}"`);
+  queries.push(name);
+
+  return [...new Set(queries)];
+}
+
 async function resolveFromCardTraderSearch(
   parsed: ParsedTcgQuery
 ): Promise<CardTraderCandidate[]> {
@@ -321,10 +444,10 @@ async function resolveFromCardTraderSearch(
   const encoded = encodeURIComponent(searchQuery);
 
   const urls = [
-    `${CARDTRADER_BASE_URL}/en/cards?search=${encoded}`,
-    `${CARDTRADER_BASE_URL}/en/cards?query=${encoded}`,
     `${CARDTRADER_BASE_URL}/en/search?query=${encoded}`,
-    `${CARDTRADER_BASE_URL}/en/search?search=${encoded}`
+    `${CARDTRADER_BASE_URL}/en/search?search=${encoded}`,
+    `${CARDTRADER_BASE_URL}/en/cards?search=${encoded}`,
+    `${CARDTRADER_BASE_URL}/en/cards?query=${encoded}`
   ];
 
   const candidates: CardTraderCandidate[] = [];
@@ -371,6 +494,116 @@ function buildCardTraderSearchQuery(parsed: ParsedTcgQuery): string {
     .map((part) => String(part || "").trim())
     .filter(Boolean)
     .join(" ");
+}
+
+function buildMagicCandidates(
+  parsed: ParsedTcgQuery,
+  scryfallCards: ScryfallCard[]
+): CardTraderCandidate[] {
+  if (parsed.platform !== "magic") return [];
+
+  const candidates: CardTraderCandidate[] = [];
+  const seen = new Set<string>();
+
+  const baseCards =
+    scryfallCards.length > 0
+      ? scryfallCards
+      : [
+          {
+            name: parsed.cleanName,
+            set: parsed.setCode ?? undefined,
+            set_name:
+              parsed.setName ??
+              (parsed.setCode && KNOWN_SET_ALIASES[parsed.setCode]
+                ? KNOWN_SET_ALIASES[parsed.setCode].name
+                : undefined),
+            collector_number: parsed.cardNumber ?? undefined,
+            rarity: undefined
+          }
+        ];
+
+  for (const card of baseCards) {
+    const name = card.name || parsed.cleanName;
+    const cardNumber = normalizeCardNumber(
+      card.collector_number || parsed.cardNumber || ""
+    );
+    const setName =
+      card.set_name ||
+      parsed.setName ||
+      (card.set && KNOWN_SET_ALIASES[normalizeSetCode(card.set)]
+        ? KNOWN_SET_ALIASES[normalizeSetCode(card.set)].name
+        : null);
+
+    if (!name || !setName) continue;
+
+    const setCode = normalizeSetCode(card.set || parsed.setCode || "");
+    const total =
+      (setCode && KNOWN_SET_ALIASES[setCode]?.total) ||
+      null;
+
+    const nameSlug = slugify(name);
+    const setSlug = slugify(setName);
+    const raritySlugs = buildMagicRaritySlugs(card.rarity);
+
+    for (const rarity of raritySlugs) {
+      const numberVariants = buildMagicNumberVariants(cardNumber, total);
+
+      for (const numberPart of numberVariants) {
+        const url = numberPart
+          ? `${CARDTRADER_BASE_URL}/en/cards/${nameSlug}-${rarity}-${numberPart}-${setSlug}`
+          : `${CARDTRADER_BASE_URL}/en/cards/${nameSlug}-${rarity}-${setSlug}`;
+
+        addCandidate(candidates, seen, {
+          title: `${name}${cardNumber ? ` (${cardNumber}${total ? `/${total}` : ""})` : ""} - ${setName}`,
+          url,
+          cardNumber: cardNumber || null,
+          setName,
+          rarity,
+          score:
+            scoreCandidate(parsed, {
+              title: name,
+              cardNumber: cardNumber || null,
+              setName
+            }) + 0.4
+        });
+      }
+    }
+  }
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 60);
+}
+
+function buildMagicNumberVariants(
+  cardNumber: string | null,
+  total: string | null
+): string[] {
+  if (!cardNumber) return [""];
+
+  const variants = new Set<string>();
+
+  if (total) {
+    variants.add(`${cardNumber}-${total}`);
+  }
+
+  variants.add(cardNumber);
+
+  return [...variants];
+}
+
+function buildMagicRaritySlugs(rarity?: string): string[] {
+  const slugs = new Set<string>();
+  const normalized = normalizeText(rarity || "");
+
+  if (normalized.includes("mythic")) slugs.add("mythic-rare");
+  if (normalized.includes("rare")) slugs.add("rare");
+  if (normalized.includes("uncommon")) slugs.add("uncommon");
+  if (normalized.includes("common")) slugs.add("common");
+
+  for (const slug of MAGIC_RARITY_SLUGS) {
+    slugs.add(slug);
+  }
+
+  return [...slugs];
 }
 
 function buildYugiohFallbackCandidates(
@@ -567,6 +800,7 @@ function buildRaritySlugs(rarity?: string): string[] {
   if (normalized.includes("collector")) slugs.add("collectors-rare");
   if (normalized.includes("ultimate")) slugs.add("ultimate-rare");
   if (normalized.includes("ghost")) slugs.add("ghost-rare");
+  if (normalized.includes("mythic")) slugs.add("mythic-rare");
 
   if (normalized.includes("special") && normalized.includes("illustration")) {
     slugs.add("special-illustration-rare");
@@ -605,7 +839,8 @@ function parseCardTraderDetail(
   if (!title) return null;
 
   const extractedPrices = extractAllTrustedPrices($, html, bodyText);
-  const selected = selectBestExtractedPrice(extractedPrices);
+  const marketMetrics = extractMarketMetrics(bodyText, extractedPrices);
+  const selected = selectBestExtractedPrice(extractedPrices, marketMetrics);
   const rawPriceText = extractRawTrustedPriceText(bodyText);
 
   return {
@@ -613,10 +848,47 @@ function parseCardTraderDetail(
     url,
     price: selected?.price ?? null,
     priceBasis: selected?.basis ?? "none",
-    currency: selected?.currency ?? null,
+    currency: selected?.currency ?? marketMetrics.currency ?? null,
     rawPriceText,
-    extractedPrices
+    extractedPrices,
+    marketMetrics
   };
+}
+
+function extractMarketMetrics(
+  bodyText: string,
+  extractedPrices: ExtractedPrice[]
+): CardTraderMarketMetrics {
+  const bestDeal = extractMetricByLabel(bodyText, "Best Deal");
+  const ctMinPrice = extractMetricByLabel(bodyText, "CT Min Price");
+  const ctMarketPrice = extractMetricByLabel(bodyText, "CT Market Price");
+  const usMarketPrice = extractMetricByLabel(bodyText, "US Market Price");
+
+  const currency =
+    bestDeal?.currency ??
+    ctMinPrice?.currency ??
+    ctMarketPrice?.currency ??
+    usMarketPrice?.currency ??
+    extractedPrices.find((price) => price.currency)?.currency ??
+    null;
+
+  return {
+    bestDeal: bestDeal?.price ?? null,
+    ctMinPrice: ctMinPrice?.price ?? null,
+    ctMarketPrice: ctMarketPrice?.price ?? null,
+    usMarketPrice: usMarketPrice?.price ?? null,
+    currency
+  };
+}
+
+function extractMetricByLabel(
+  text: string,
+  label: string
+): { price: number; currency: "EUR" | "USD" | "GBP" | null } | null {
+  const segment = extractSegmentAfterLabel(text, label, 80);
+  if (!segment) return null;
+
+  return extractFirstPriceFromSegment(segment);
 }
 
 function extractAllTrustedPrices(
@@ -831,7 +1103,19 @@ function extractLooseScriptPrices(scriptContent: string): ExtractedPrice[] {
   return prices;
 }
 
-function selectBestExtractedPrice(prices: ExtractedPrice[]): ExtractedPrice | null {
+function selectBestExtractedPrice(
+  prices: ExtractedPrice[],
+  marketMetrics: CardTraderMarketMetrics
+): ExtractedPrice | null {
+  if (marketMetrics.bestDeal && marketMetrics.bestDeal > 0) {
+    return {
+      price: marketMetrics.bestDeal,
+      currency: marketMetrics.currency,
+      basis: "text.Best Deal",
+      context: "CardTrader Best Deal"
+    };
+  }
+
   const trusted = prices
     .filter((entry) => isUsableCardPrice(entry.price))
     .filter((entry) => !isBadPriceContext(entry.context))
@@ -1347,15 +1631,19 @@ function computeConfidence(
     confidence += 0.08;
   }
 
-  if (detail.priceBasis === "cardtrader.offer.price") {
+  if (detail.priceBasis === "text.Best Deal") {
     confidence += 0.08;
+  }
+
+  if (detail.priceBasis === "cardtrader.offer.price") {
+    confidence += 0.06;
   }
 
   if (detail.currency === "USD" || detail.currency === "EUR") {
     confidence += 0.04;
   }
 
-  return Math.max(0.45, Math.min(0.88, Number(confidence.toFixed(2))));
+  return Math.max(0.45, Math.min(0.92, Number(confidence.toFixed(2))));
 }
 
 function isDetailCompatible(
@@ -1607,4 +1895,11 @@ function safeJsonParse(value: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+function escapeScryfallValue(value: string): string {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .trim();
 }
