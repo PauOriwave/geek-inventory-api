@@ -100,16 +100,16 @@ const sources: SourceDefinition[] = [
     handler: getTcgDexPrice
   },
   {
-    name: "scryfall",
-    priority: 98,
-    categories: ["tcg"],
-    handler: getScryfallPrice
-  },
-  {
     name: "cardtrader",
-    priority: 96,
+    priority: 99,
     categories: ["tcg"],
     handler: getCardTraderPrice
+  },
+  {
+    name: "scryfall",
+    priority: 88,
+    categories: ["tcg"],
+    handler: getScryfallPrice
   }
 ];
 
@@ -120,75 +120,33 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
     source.categories.includes(item.category)
   );
 
-  if (item.category !== "tcg") {
-    return categorySources;
-  }
+  if (item.category !== "tcg") return categorySources;
 
   const platform = normalizePlatform(item.platform);
 
   if (platform === "pokemon") {
     return categorySources.filter((source) =>
-      [
-        "pokemon_tcg_api",
-        "tcgdex",
-        "cardtrader",
-        "dungeon_marvels"
-      ].includes(source.name)
-    );
-  }
-
-  if (platform === "yugioh") {
-    return categorySources.filter((source) =>
-      [
-        "cardtrader",
-        "dungeon_marvels"
-      ].includes(source.name)
+      ["pokemon_tcg_api", "tcgdex", "cardtrader", "dungeon_marvels"].includes(
+        source.name
+      )
     );
   }
 
   if (platform === "magic") {
     return categorySources.filter((source) =>
-      [
-        "scryfall",
-        "cardtrader",
-        "dungeon_marvels"
-      ].includes(source.name)
+      ["cardtrader", "scryfall", "dungeon_marvels"].includes(source.name)
     );
   }
 
-  if (platform === "onepiece") {
+  if (
+    platform === "yugioh" ||
+    platform === "onepiece" ||
+    platform === "lorcana" ||
+    platform === "digimon" ||
+    platform === "fleshandblood"
+  ) {
     return categorySources.filter((source) =>
-      [
-        "cardtrader",
-        "dungeon_marvels"
-      ].includes(source.name)
-    );
-  }
-
-  if (platform === "lorcana") {
-    return categorySources.filter((source) =>
-      [
-        "cardtrader",
-        "dungeon_marvels"
-      ].includes(source.name)
-    );
-  }
-
-  if (platform === "digimon") {
-    return categorySources.filter((source) =>
-      [
-        "cardtrader",
-        "dungeon_marvels"
-      ].includes(source.name)
-    );
-  }
-
-  if (platform === "fleshandblood") {
-    return categorySources.filter((source) =>
-      [
-        "cardtrader",
-        "dungeon_marvels"
-      ].includes(source.name)
+      ["cardtrader", "dungeon_marvels"].includes(source.name)
     );
   }
 
@@ -214,9 +172,9 @@ function normalizePlatform(value: string | null): string | null {
 
   if (
     normalized === "yugioh" ||
-    normalized === "yu-gi-oh" ||
+    normalized === "yugiohtcg" ||
     normalized === "yugi" ||
-    normalized === "yugiohtcg"
+    normalized === "yu-gi-oh"
   ) {
     return "yugioh";
   }
@@ -237,24 +195,15 @@ function normalizePlatform(value: string | null): string | null {
     return "onepiece";
   }
 
-  if (
-    normalized === "lorcana" ||
-    normalized === "disneylorcana"
-  ) {
+  if (normalized === "lorcana" || normalized === "disneylorcana") {
     return "lorcana";
   }
 
-  if (
-    normalized === "digimon" ||
-    normalized === "digimontcg"
-  ) {
+  if (normalized === "digimon" || normalized === "digimontcg") {
     return "digimon";
   }
 
-  if (
-    normalized === "fleshandblood" ||
-    normalized === "fab"
-  ) {
+  if (normalized === "fleshandblood" || normalized === "fab") {
     return "fleshandblood";
   }
 
@@ -270,18 +219,14 @@ function buildSourceQuery(item: Item) {
 }
 
 function getCacheAgeHours(date: Date) {
-  const now = new Date();
-  return (now.getTime() - date.getTime()) / (1000 * 60 * 60);
+  return (new Date().getTime() - date.getTime()) / (1000 * 60 * 60);
 }
 
 function isCacheValid(date: Date) {
   return getCacheAgeHours(date) < CACHE_TTL_HOURS;
 }
 
-async function logScraperAttempts(
-  item: Item,
-  attempts: ScraperAttemptLog[]
-) {
+async function logScraperAttempts(item: Item, attempts: ScraperAttemptLog[]) {
   if (attempts.length === 0) return;
 
   await prisma.scraperRunLog.createMany({
@@ -293,6 +238,7 @@ async function logScraperAttempts(
       matchedTitle: attempt.matchedTitle ?? null,
       matchedUrl: attempt.matchedUrl ?? null,
       matchedPrice: attempt.matchedPrice ?? null,
+      currency: attempt.currency ?? null,
       confidence: attempt.confidence ?? null,
       errorMessage: attempt.errorMessage ?? null
     }))
@@ -308,10 +254,7 @@ function toPrismaJson(value: unknown): Prisma.InputJsonValue {
   ) as Prisma.InputJsonValue;
 }
 
-async function saveSourceMarketData(
-  item: Item,
-  results: ScraperSourceResult[]
-) {
+async function saveSourceMarketData(item: Item, results: ScraperSourceResult[]) {
   const enrichedResults = results.filter(
     (result) => result.metadata && Object.keys(result.metadata).length > 0
   );
@@ -363,15 +306,6 @@ async function scrapeValuation(item: Item): Promise<{
     activeSources.map((source) => source.name)
   );
 
-  console.log(
-    "[valuation] active source handlers:",
-    activeSources.map((source) => ({
-      name: source.name,
-      categories: source.categories,
-      hasHandler: typeof source.handler === "function"
-    }))
-  );
-
   if (activeSources.length === 0) {
     return {
       valuation: null,
@@ -396,10 +330,7 @@ async function scrapeValuation(item: Item): Promise<{
         matchedTitle: result?.matchedTitle
       });
 
-      return {
-        source,
-        result
-      };
+      return { source, result };
     })
   );
 
@@ -414,10 +345,7 @@ async function scrapeValuation(item: Item): Promise<{
     if (entry.status === "fulfilled") {
       const result = entry.value.result;
 
-      if (
-        result?.metadata &&
-        Object.keys(result.metadata).length > 0
-      ) {
+      if (result?.metadata && Object.keys(result.metadata).length > 0) {
         marketDataResults.push(result);
       }
 
@@ -486,24 +414,20 @@ async function scrapeValuation(item: Item): Promise<{
     };
   }
 
-  if (valid.length === 1) {
-    const highConfidenceBest = pickHighConfidenceBest(valid);
+  const preferred = pickPreferredValuationResult(item, valid);
 
-    if (highConfidenceBest) {
-      return {
-        valuation: {
-          price: Number(highConfidenceBest.price.toFixed(2)),
-          currency: highConfidenceBest.currency ?? null,
-          source: highConfidenceBest.source,
-          confidence: Number(
-            Math.min(0.95, highConfidenceBest.confidence).toFixed(2)
-          )
-        },
-        attempts,
-        validResults: valid,
-        marketDataResults
-      };
-    }
+  if (preferred) {
+    return {
+      valuation: {
+        price: Number(preferred.price.toFixed(2)),
+        currency: preferred.currency ?? null,
+        source: preferred.source,
+        confidence: Number(Math.min(0.95, preferred.confidence).toFixed(2))
+      },
+      attempts,
+      validResults: valid,
+      marketDataResults
+    };
   }
 
   const weighted = calculateWeightedValuation(valid);
@@ -527,9 +451,37 @@ function getMinimumConfidenceForResult(
   return MIN_CONFIDENCE_FOR_VALUATION;
 }
 
-function pickHighConfidenceBest(
+function pickPreferredValuationResult(
+  item: Item,
   results: ScraperSourceResult[]
 ): ScraperSourceResult | null {
+  if (item.category === "tcg") {
+    const cardTraderBestDeal = results.find((result) => {
+      if (result.source !== "cardtrader") return false;
+
+      const metadata = result.metadata ?? {};
+      const priceBasis = String(metadata.priceBasis ?? "");
+
+      return (
+        result.confidence >= HIGH_CONFIDENCE_THRESHOLD ||
+        priceBasis === "text.Best Deal" ||
+        Boolean(metadata.bestDeal)
+      );
+    });
+
+    if (cardTraderBestDeal) {
+      console.log("[valuation] Using CardTrader TCG preferred result:", {
+        source: cardTraderBestDeal.source,
+        price: cardTraderBestDeal.price,
+        currency: cardTraderBestDeal.currency,
+        confidence: cardTraderBestDeal.confidence,
+        matchedTitle: cardTraderBestDeal.matchedTitle
+      });
+
+      return cardTraderBestDeal;
+    }
+  }
+
   const highConfidence = results.filter(
     (result) => result.confidence >= HIGH_CONFIDENCE_THRESHOLD
   );
@@ -571,10 +523,7 @@ function calculateWeightedValuation(
     const priority = getSourcePriority(result.source);
     const weight = result.confidence * priority;
 
-    return {
-      result,
-      weight
-    };
+    return { result, weight };
   });
 
   const totalWeight = weightedResults.reduce(
@@ -628,7 +577,11 @@ function filterCurrencyCompatibleResults(
   for (const result of withCurrency) {
     const currency = result.currency as SupportedCurrency;
     const current = currencyScores.get(currency) ?? 0;
-    currencyScores.set(currency, current + result.confidence * getSourcePriority(result.source));
+
+    currencyScores.set(
+      currency,
+      current + result.confidence * getSourcePriority(result.source)
+    );
   }
 
   const preferredCurrency = [...currencyScores.entries()].sort(
@@ -660,11 +613,11 @@ export async function getValuation(
   });
 
   if (!cache) return null;
-
   if (!allowStale && !isCacheValid(cache.updatedAt)) return null;
 
   return {
     price: Number(cache.price),
+    currency: cache.currency as SupportedCurrency | null,
     source: cache.source,
     confidence: cache.confidence
   };
@@ -675,11 +628,8 @@ export async function refreshValuation(
 ): Promise<ValuationResult | null> {
   const key = buildCacheKey(item);
 
-  const {
-    valuation,
-    attempts,
-    marketDataResults
-  } = await scrapeValuation(item);
+  const { valuation, attempts, marketDataResults } =
+    await scrapeValuation(item);
 
   await logScraperAttempts(item, attempts);
   await saveSourceMarketData(item, marketDataResults);
@@ -693,6 +643,7 @@ export async function refreshValuation(
       where: { key },
       update: {
         price: valuation.price,
+        currency: valuation.currency ?? null,
         source: valuation.source,
         confidence: valuation.confidence,
         updatedAt: now
@@ -700,6 +651,7 @@ export async function refreshValuation(
       create: {
         key,
         price: valuation.price,
+        currency: valuation.currency ?? null,
         source: valuation.source,
         confidence: valuation.confidence,
         updatedAt: now
@@ -710,6 +662,7 @@ export async function refreshValuation(
       where: { id: item.id },
       data: {
         marketValue: valuation.price,
+        marketCurrency: valuation.currency ?? null,
         valuationSource: valuation.source,
         valuationConfidence: valuation.confidence,
         lastValuationAt: now
@@ -720,6 +673,7 @@ export async function refreshValuation(
       data: {
         itemId: item.id,
         marketValue: valuation.price,
+        currency: valuation.currency ?? null,
         source: valuation.source,
         confidence: valuation.confidence,
         recordedAt: now
