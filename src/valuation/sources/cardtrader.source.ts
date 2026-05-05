@@ -69,8 +69,29 @@ const TIMEOUT = 15000;
 const KNOWN_SET_ALIASES: Record<string, { name: string; total?: string }> = {
   POR: { name: "Perfect Order", total: "088" },
   SUDA: { name: "Supreme Darkness" },
-  SOS: { name: "Secrets of Strixhaven", total: "276" }
+  SOS: { name: "Secrets of Strixhaven", total: "276" },
+  OP13: { name: "Carrying On His Will" },
+  OP12: { name: "Legacy of the Master" },
+  OP11: { name: "A Fist of Divine Speed" },
+  OP10: { name: "Royal Blood" },
+  OP09: { name: "Emperors in the New World" },
+  OP08: { name: "Two Legends" },
+  OP07: { name: "500 Years in the Future" },
+  OP06: { name: "Wings of the Captain" },
+  OP05: { name: "Awakening of the New Era" }
 };
+
+const ONE_PIECE_FALLBACK_SETS = [
+  { code: "OP-13", name: "Carrying On His Will" },
+  { code: "OP-12", name: "Legacy of the Master" },
+  { code: "OP-11", name: "A Fist of Divine Speed" },
+  { code: "OP-10", name: "Royal Blood" },
+  { code: "OP-09", name: "Emperors in the New World" },
+  { code: "OP-08", name: "Two Legends" },
+  { code: "OP-07", name: "500 Years in the Future" },
+  { code: "OP-06", name: "Wings of the Captain" },
+  { code: "OP-05", name: "Awakening of the New Era" }
+];
 
 const YUGIOH_FALLBACK_SETS = [
   "Supreme Darkness",
@@ -83,13 +104,43 @@ const YUGIOH_FALLBACK_SETS = [
   "Duelist Nexus"
 ];
 
+const GENERIC_TCG_FALLBACK_SETS: Record<string, string[]> = {
+  lorcana: [
+    "Fabled",
+    "Reign of Jafar",
+    "Archazia's Island",
+    "Azurite Sea",
+    "Shimmering Skies",
+    "Ursula's Return"
+  ],
+  digimon: [
+    "Versus Royal Knights",
+    "Cyberdramon",
+    "Exceed Apocalypse",
+    "Infernal Ascension",
+    "Secret Crisis"
+  ],
+  fleshandblood: [
+    "High Seas",
+    "The Hunted",
+    "Rosetta",
+    "Part the Mistveil",
+    "Heavy Hitters"
+  ]
+};
+
 const RARITY_SLUGS = [
+  "manga-rare",
+  "special-rare",
+  "super-rare",
+  "leader",
+  "secret-rare",
+  "parallel",
+  "alternate-art",
   "mythic-rare",
   "common",
   "rare",
-  "super-rare",
   "ultra-rare",
-  "secret-rare",
   "quarter-century-secret-rare",
   "starlight-rare",
   "collectors-rare",
@@ -139,14 +190,18 @@ export async function getCardTraderPrice(
   const candidates = dedupeCandidates([
     ...buildMagicCandidates(parsed, scryfallCards),
     ...buildDirectCandidates(parsed),
+    ...buildPlatformFallbackCandidates(parsed),
     ...buildYugiohFallbackCandidates(parsed),
     ...(await searchCandidates(parsed))
   ]).sort((a, b) => b.score - a.score);
 
   console.log(
     "🟧 CT candidates:",
-    candidates.slice(0, 30).map((candidate) => ({
+    candidates.slice(0, 40).map((candidate) => ({
       title: candidate.title,
+      cardNumber: candidate.cardNumber,
+      setName: candidate.setName,
+      rarity: candidate.rarity,
       score: Number(candidate.score.toFixed(2)),
       url: candidate.url
     }))
@@ -188,7 +243,7 @@ export async function getCardTraderPrice(
       priceBasis: detail.priceBasis,
       currency,
       marketMetrics: detail.marketMetrics,
-      extractedPrices: detail.extractedPrices.slice(0, 8),
+      extractedPrices: detail.extractedPrices.slice(0, 10),
       confidence,
       url: detail.url
     });
@@ -296,7 +351,7 @@ function parseTcgQuery(item: Item): ParsedTcgQuery {
   const parenthesisSetCode =
     parts.find(
       (part) =>
-        /^[A-Z0-9]{2,12}$/i.test(part) &&
+        /^[A-Z0-9-]{2,12}$/i.test(part) &&
         !/^\d+[a-zA-Z]?\/?\d*[a-zA-Z]?$/i.test(part) &&
         !isGenericPlatformToken(part)
     ) ?? null;
@@ -308,9 +363,14 @@ function parseTcgQuery(item: Item): ParsedTcgQuery {
       ? region
       : null;
 
+  const normalizedParenthesisSetCode = parenthesisSetCode
+    ? normalizeSetCode(parenthesisSetCode)
+    : null;
+
   const knownSetFromParenthesis =
-    parenthesisSetCode && KNOWN_SET_ALIASES[normalizeSetCode(parenthesisSetCode)]
-      ? KNOWN_SET_ALIASES[normalizeSetCode(parenthesisSetCode)].name
+    normalizedParenthesisSetCode &&
+    KNOWN_SET_ALIASES[normalizedParenthesisSetCode]
+      ? KNOWN_SET_ALIASES[normalizedParenthesisSetCode].name
       : null;
 
   const cardNumber =
@@ -328,7 +388,7 @@ function parseTcgQuery(item: Item): ParsedTcgQuery {
   return {
     cleanName: cleanName || rawName,
     platform,
-    setCode: parenthesisSetCode ? normalizeSetCode(parenthesisSetCode) : null,
+    setCode: normalizedParenthesisSetCode,
     setName: regionAsSetName || knownSetFromParenthesis || null,
     cardNumber: cardNumber ? normalizeCardNumber(cardNumber) : null
   };
@@ -475,6 +535,8 @@ function buildDirectCandidates(parsed: ParsedTcgQuery): CardTraderCandidate[] {
       : null);
 
   const setSlug = setName ? slugify(setName) : null;
+  const setCodeSlug = parsed.setCode ? slugifySetCode(parsed.setCode) : null;
+
   const total =
     parsed.setCode && KNOWN_SET_ALIASES[parsed.setCode]?.total
       ? KNOWN_SET_ALIASES[parsed.setCode].total ?? null
@@ -484,6 +546,26 @@ function buildDirectCandidates(parsed: ParsedTcgQuery): CardTraderCandidate[] {
     parsed.platform === "magic" ? MAGIC_RARITY_SLUGS : RARITY_SLUGS;
 
   if (setSlug) {
+    if (setCodeSlug) {
+      candidates.push({
+        title: `${parsed.cleanName} - ${setCodeSlug} - ${setName}`,
+        url: `${BASE}/en/cards/${nameSlug}-${setCodeSlug}-${setSlug}`,
+        cardNumber: parsed.cardNumber,
+        setName,
+        rarity: null,
+        score: 0.9
+      });
+    }
+
+    candidates.push({
+      title: `${parsed.cleanName} - ${setName}`,
+      url: `${BASE}/en/cards/${nameSlug}-${setSlug}`,
+      cardNumber: parsed.cardNumber,
+      setName,
+      rarity: null,
+      score: 0.75
+    });
+
     for (const rarity of rarities) {
       for (const numberPart of buildNumberVariants(parsed.cardNumber, total)) {
         candidates.push({
@@ -496,6 +578,19 @@ function buildDirectCandidates(parsed: ParsedTcgQuery): CardTraderCandidate[] {
           rarity,
           score: 0.7
         });
+
+        if (setCodeSlug) {
+          candidates.push({
+            title: `${parsed.cleanName} - ${rarity} - ${setCodeSlug} - ${setName}`,
+            url: numberPart
+              ? `${BASE}/en/cards/${nameSlug}-${rarity}-${numberPart}-${setCodeSlug}-${setSlug}`
+              : `${BASE}/en/cards/${nameSlug}-${rarity}-${setCodeSlug}-${setSlug}`,
+            cardNumber: parsed.cardNumber,
+            setName,
+            rarity,
+            score: 0.72
+          });
+        }
       }
     }
   }
@@ -510,6 +605,139 @@ function buildDirectCandidates(parsed: ParsedTcgQuery): CardTraderCandidate[] {
   });
 
   return candidates;
+}
+
+function buildPlatformFallbackCandidates(
+  parsed: ParsedTcgQuery
+): CardTraderCandidate[] {
+  if (parsed.platform === "onepiece") {
+    return buildOnePieceFallbackCandidates(parsed);
+  }
+
+  const fallbackSets = parsed.platform
+    ? GENERIC_TCG_FALLBACK_SETS[parsed.platform]
+    : null;
+
+  if (!fallbackSets || fallbackSets.length === 0) return [];
+
+  const nameSlug = slugify(parsed.cleanName);
+  const candidates: CardTraderCandidate[] = [];
+
+  for (const setName of fallbackSets) {
+    const setSlug = slugify(setName);
+
+    candidates.push({
+      title: `${parsed.cleanName} - ${setName}`,
+      url: `${BASE}/en/cards/${nameSlug}-${setSlug}`,
+      cardNumber: parsed.cardNumber,
+      setName,
+      rarity: null,
+      score: 0.6
+    });
+
+    for (const rarity of RARITY_SLUGS) {
+      candidates.push({
+        title: `${parsed.cleanName} - ${rarity} - ${setName}`,
+        url: `${BASE}/en/cards/${nameSlug}-${rarity}-${setSlug}`,
+        cardNumber: parsed.cardNumber,
+        setName,
+        rarity,
+        score: 0.55
+      });
+    }
+  }
+
+  return candidates.slice(0, 80);
+}
+
+function buildOnePieceFallbackCandidates(
+  parsed: ParsedTcgQuery
+): CardTraderCandidate[] {
+  const nameSlug = slugify(parsed.cleanName);
+  const candidates: CardTraderCandidate[] = [];
+
+  const preferredSets = [
+    ...ONE_PIECE_FALLBACK_SETS.filter((set) => {
+      if (!parsed.setCode && !parsed.setName) return true;
+
+      const normalizedCode = normalizeSetCode(set.code);
+      const normalizedSetCode = normalizeSetCode(parsed.setCode || "");
+      const normalizedSetName = normalizeText(parsed.setName || "");
+
+      return (
+        normalizedCode === normalizedSetCode ||
+        normalizeText(set.name).includes(normalizedSetName) ||
+        normalizedSetName.includes(normalizeText(set.name))
+      );
+    }),
+    ...ONE_PIECE_FALLBACK_SETS
+  ];
+
+  const seen = new Set<string>();
+
+  for (const set of preferredSets) {
+    const key = `${set.code}|${set.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const setCodeSlug = slugifySetCode(set.code);
+    const setSlug = slugify(set.name);
+
+    candidates.push({
+      title: `${parsed.cleanName} - ${set.code} - ${set.name}`,
+      url: `${BASE}/en/cards/${nameSlug}-${setCodeSlug}-${setSlug}`,
+      cardNumber: parsed.cardNumber,
+      setName: set.name,
+      rarity: null,
+      score:
+        scoreCandidate(parsed, {
+          title: parsed.cleanName,
+          cardNumber: parsed.cardNumber,
+          setName: set.name
+        }) + 0.55
+    });
+
+    candidates.push({
+      title: `${parsed.cleanName} - ${set.name}`,
+      url: `${BASE}/en/cards/${nameSlug}-${setSlug}`,
+      cardNumber: parsed.cardNumber,
+      setName: set.name,
+      rarity: null,
+      score: 0.65
+    });
+
+    for (const rarity of [
+      "super-rare",
+      "rare",
+      "common",
+      "leader",
+      "secret-rare",
+      "special-rare",
+      "manga-rare",
+      "parallel",
+      "alternate-art"
+    ]) {
+      candidates.push({
+        title: `${parsed.cleanName} - ${rarity} - ${set.code} - ${set.name}`,
+        url: `${BASE}/en/cards/${nameSlug}-${rarity}-${setCodeSlug}-${setSlug}`,
+        cardNumber: parsed.cardNumber,
+        setName: set.name,
+        rarity,
+        score: 0.58
+      });
+
+      candidates.push({
+        title: `${parsed.cleanName} - ${rarity} - ${set.name}`,
+        url: `${BASE}/en/cards/${nameSlug}-${rarity}-${setSlug}`,
+        cardNumber: parsed.cardNumber,
+        setName: set.name,
+        rarity,
+        score: 0.55
+      });
+    }
+  }
+
+  return candidates.slice(0, 120);
 }
 
 function buildYugiohFallbackCandidates(
@@ -534,6 +762,15 @@ function buildYugiohFallbackCandidates(
   for (const setName of uniqueSetNames) {
     const setSlug = slugify(setName);
 
+    candidates.push({
+      title: `${parsed.cleanName} - ${setName}`,
+      url: `${BASE}/en/cards/${nameSlug}-${setSlug}`,
+      cardNumber: parsed.cardNumber,
+      setName,
+      rarity: null,
+      score: 0.65
+    });
+
     for (const rarity of RARITY_SLUGS) {
       candidates.push({
         title: `${parsed.cleanName} - ${rarity} - ${setName}`,
@@ -551,26 +788,35 @@ function buildYugiohFallbackCandidates(
     }
   }
 
-  return candidates.slice(0, 60);
+  return candidates.slice(0, 80);
 }
 
 async function searchCandidates(
   parsed: ParsedTcgQuery
 ): Promise<CardTraderCandidate[]> {
-  const query = encodeURIComponent(
-    [parsed.cleanName, parsed.cardNumber, parsed.setName, parsed.setCode]
-      .filter(Boolean)
-      .join(" ")
-  );
+  const queryText = [
+    parsed.cleanName,
+    parsed.cardNumber,
+    parsed.setCode,
+    parsed.setName
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const query = encodeURIComponent(queryText);
 
   const urls = [
     `${BASE}/en/search?query=${query}`,
-    `${BASE}/en/search?search=${query}`
+    `${BASE}/en/search?search=${query}`,
+    `${BASE}/en/cards?query=${query}`,
+    `${BASE}/en/cards?search=${query}`
   ];
 
   const results: CardTraderCandidate[] = [];
 
   for (const url of urls) {
+    console.log("🟧 CT Search:", url);
+
     const html = await fetchHtml(url);
     if (!html) continue;
 
@@ -585,6 +831,7 @@ async function searchCandidates(
       const title =
         cleanTitle($(el).text()) ||
         cleanTitle($(el).attr("title") || "") ||
+        cleanTitle($(el).closest("article, li, div, tr, section").text()) ||
         titleFromUrl(absoluteUrl);
 
       const score = scoreSearchCandidate(parsed, title, absoluteUrl);
@@ -595,16 +842,43 @@ async function searchCandidates(
         title,
         url: absoluteUrl,
         cardNumber: extractCardNumberFromText(`${title} ${absoluteUrl}`),
-        setName: extractSetNameFromTitle(title),
+        setName: extractSetNameFromTitle(title) || extractSetNameFromUrl(absoluteUrl),
         rarity: extractRarityFromUrl(absoluteUrl),
         score
       });
     });
 
+    for (const absoluteUrl of extractRawCardTraderUrls(html)) {
+      const title = titleFromUrl(absoluteUrl);
+      const score = scoreSearchCandidate(parsed, title, absoluteUrl);
+
+      if (score < 0.45) continue;
+
+      results.push({
+        title,
+        url: absoluteUrl,
+        cardNumber: extractCardNumberFromText(`${title} ${absoluteUrl}`),
+        setName: extractSetNameFromTitle(title) || extractSetNameFromUrl(absoluteUrl),
+        rarity: extractRarityFromUrl(absoluteUrl),
+        score
+      });
+    }
+
+    console.log(
+      "🟧 CT search candidates:",
+      results.slice(0, 10).map((candidate) => ({
+        title: candidate.title,
+        score: Number(candidate.score.toFixed(2)),
+        url: candidate.url
+      }))
+    );
+
     if (results.length > 0) break;
   }
 
-  return results.slice(0, 20);
+  return dedupeCandidates(results)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 30);
 }
 
 function parseDetail(html: string, url: string): CardTraderDetail | null {
@@ -666,7 +940,7 @@ function extractMetricByLabel(
   text: string,
   label: string
 ): { price: number; currency: Currency | null } | null {
-  const segment = extractSegmentAfterLabel(text, label, 100);
+  const segment = extractSegmentAfterLabel(text, label, 140);
   if (!segment) return null;
 
   return extractFirstPriceFromSegment(segment);
@@ -680,7 +954,7 @@ function extractAllTrustedPrices(
   const prices: ExtractedPrice[] = [];
 
   for (const label of TRUSTED_PRICE_LABELS) {
-    const segment = extractSegmentAfterLabel(bodyText, label, 180);
+    const segment = extractSegmentAfterLabel(bodyText, label, 220);
     const parsed = segment ? extractFirstPriceFromSegment(segment) : null;
 
     if (parsed) {
@@ -696,7 +970,7 @@ function extractAllTrustedPrices(
   $("body *").each((_, el) => {
     const text = $(el).text().replace(/\s+/g, " ").trim();
 
-    if (!text || text.length > 400) return;
+    if (!text || text.length > 500) return;
 
     const hasTrustedLabel = TRUSTED_PRICE_LABELS.some((label) =>
       normalizeText(text).includes(normalizeText(label))
@@ -769,10 +1043,16 @@ function walkJson(
         "ct_min_price",
         "ctmarketprice",
         "ct_market_price",
+        "usmarketprice",
+        "us_market_price",
         "marketprice",
         "market_price",
         "minprice",
-        "min_price"
+        "min_price",
+        "pricecents",
+        "price_cents",
+        "amountcents",
+        "amount_cents"
       ].includes(normalizedKey)
     ) {
       const price = parseJsonPriceValue(nestedValue);
@@ -790,7 +1070,7 @@ function walkJson(
             inferCurrencyFromObject(record) ||
             inferCurrencyFromObject(parent || {}),
           basis,
-          context: JSON.stringify(record).slice(0, 500)
+          context: JSON.stringify(record).slice(0, 600)
         });
       }
     }
@@ -802,8 +1082,8 @@ function walkJson(
 function extractLooseScriptPrices(html: string): ExtractedPrice[] {
   const prices: ExtractedPrice[] = [];
   const patterns = [
-    /"(?:(?:ct_)?market_price|marketPrice|ctMarketPrice|bestDeal|best_deal|minPrice|min_price|price)"\s*:\s*"?([€$£]?\s*\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
-    /(?:ctMarketPrice|ctMinPrice|bestDeal|marketPrice|minPrice|price)\s*[:=]\s*"?([€$£]?\s*\d{1,6}(?:[.,]\d{1,2})?)"?/gi
+    /"(?:(?:ct_)?market_price|marketPrice|ctMarketPrice|ctMinPrice|bestDeal|best_deal|usMarketPrice|us_market_price|minPrice|min_price|price)"\s*:\s*"?([€$£]?\s*\d{1,6}(?:[.,]\d{1,2})?)"?/gi,
+    /(?:ctMarketPrice|ctMinPrice|bestDeal|marketPrice|usMarketPrice|minPrice|price)\s*[:=]\s*"?([€$£]?\s*\d{1,6}(?:[.,]\d{1,2})?)"?/gi
   ];
 
   for (const pattern of patterns) {
@@ -818,7 +1098,7 @@ function extractLooseScriptPrices(html: string): ExtractedPrice[] {
         price,
         currency,
         basis: "script.loose_price",
-        context: getMatchContext(html, match.index ?? 0, 180)
+        context: getMatchContext(html, match.index ?? 0, 220)
       });
     }
   }
@@ -842,7 +1122,10 @@ function selectBestPrice(
   const trusted = prices
     .filter((entry) => isUsableCardPrice(entry.price))
     .filter((entry) => !isBadPriceContext(entry.context))
-    .sort((a, b) => getPriceBasisPriority(b.basis) - getPriceBasisPriority(a.basis));
+    .sort(
+      (a, b) =>
+        getPriceBasisPriority(b.basis) - getPriceBasisPriority(a.basis)
+    );
 
   return trusted[0] ?? null;
 }
@@ -854,7 +1137,7 @@ function computeConfidence(
 ): number {
   let confidence = 0.45;
 
-  confidence += Math.min(0.2, candidate.score * 0.08);
+  confidence += Math.min(0.22, candidate.score * 0.08);
 
   if (detail.price && detail.price > 0) confidence += 0.18;
 
@@ -888,13 +1171,14 @@ function isDetailCompatible(
 ): boolean {
   const normalizedTitle = normalizeText(detail.title);
   const normalizedName = normalizeText(parsed.cleanName);
+  const normalizedUrl = normalizeText(detail.url);
 
   const wantedTokens = normalizedName
     .split(" ")
     .filter((token) => token.length > 2);
 
-  const matchedTokens = wantedTokens.filter((token) =>
-    normalizedTitle.includes(token)
+  const matchedTokens = wantedTokens.filter(
+    (token) => normalizedTitle.includes(token) || normalizedUrl.includes(token)
   );
 
   if (
@@ -908,6 +1192,15 @@ function isDetailCompatible(
     parsed.cardNumber &&
     candidate.cardNumber &&
     normalizeCardNumber(candidate.cardNumber) !== parsed.cardNumber
+  ) {
+    return false;
+  }
+
+  if (
+    parsed.setName &&
+    candidate.setName &&
+    !normalizeText(candidate.setName).includes(normalizeText(parsed.setName)) &&
+    !normalizedUrl.includes(normalizeText(parsed.setName).replace(/\s+/g, ""))
   ) {
     return false;
   }
@@ -949,7 +1242,18 @@ function scoreCandidate(
     score += 0.5;
   }
 
-  return score;
+  if (parsed.setCode && candidate.setName) {
+    const knownSet = KNOWN_SET_ALIASES[parsed.setCode];
+
+    if (
+      knownSet &&
+      normalizeText(candidate.setName).includes(normalizeText(knownSet.name))
+    ) {
+      score += 0.45;
+    }
+  }
+
+  return Number(score.toFixed(4));
 }
 
 function scoreSearchCandidate(
@@ -974,6 +1278,27 @@ function scoreSearchCandidate(
   );
 
   if (tokens.length > 0) score += (matched.length / tokens.length) * 0.8;
+
+  if (
+    parsed.cardNumber &&
+    normalizeCardNumber(`${title} ${url}`).includes(parsed.cardNumber)
+  ) {
+    score += 0.5;
+  }
+
+  if (
+    parsed.setName &&
+    normalizeText(`${title} ${url}`).includes(normalizeText(parsed.setName))
+  ) {
+    score += 0.35;
+  }
+
+  if (
+    parsed.setCode &&
+    normalizeText(`${title} ${url}`).includes(normalizeText(parsed.setCode))
+  ) {
+    score += 0.25;
+  }
 
   return Number(score.toFixed(4));
 }
@@ -1012,6 +1337,7 @@ function getPriceBasisPriority(basis: string): number {
   if (normalized.includes("best deal")) return 100;
   if (normalized.includes("ct min price")) return 95;
   if (normalized.includes("ct market price")) return 90;
+  if (normalized.includes("us market price")) return 89;
   if (normalized.includes("cardtrader.offer.price")) return 88;
   if (normalized.includes("marketprice")) return 85;
   if (normalized.includes("market_price")) return 85;
@@ -1130,7 +1456,7 @@ function extractSegmentAfterLabel(
 
 function extractRawTrustedPriceText(text: string): string | null {
   for (const label of TRUSTED_PRICE_LABELS) {
-    const segment = extractSegmentAfterLabel(text, label, 180);
+    const segment = extractSegmentAfterLabel(text, label, 220);
     if (segment) return segment;
   }
 
@@ -1198,9 +1524,37 @@ function extractSetNameFromTitle(title: string): string | null {
   return parts.length > 1 ? parts[parts.length - 1] : null;
 }
 
+function extractSetNameFromUrl(url: string): string | null {
+  const title = titleFromUrl(url);
+  const rarity = extractRarityFromUrl(url);
+
+  if (!rarity) return null;
+
+  const parts = title.split(rarity.replace(/-/g, " "));
+  const tail = parts[1]?.trim();
+
+  return tail || null;
+}
+
 function extractRarityFromUrl(url: string): string | null {
   const normalized = normalizeText(url).replace(/\s+/g, "-");
   return RARITY_SLUGS.find((slug) => normalized.includes(slug)) ?? null;
+}
+
+function extractRawCardTraderUrls(html: string): string[] {
+  const decoded = decodeHtml(html)
+    .replace(/\\u002F/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/%2F/gi, "/");
+
+  const matches = [
+    ...decoded.matchAll(
+      /https?:\/\/www\.cardtrader\.com\/en\/cards\/[^"'<>\\\s]+/gi
+    ),
+    ...decoded.matchAll(/\/en\/cards\/[^"'<>\\\s]+/gi)
+  ];
+
+  return [...new Set(matches.map((match) => absolutize(match[0])))];
 }
 
 function getMatchContext(text: string, index: number, size: number): string {
@@ -1215,13 +1569,16 @@ function normalizePlatform(value: string | null): string | null {
   if (!normalized) return null;
 
   if (normalized === "pokemon" || normalized === "pokemontcg") return "pokemon";
+
   if (
     normalized === "yugioh" ||
     normalized === "yugiohtcg" ||
-    normalized === "yugi"
+    normalized === "yugi" ||
+    normalized === "yu-gi-oh"
   ) {
     return "yugioh";
   }
+
   if (
     normalized === "magic" ||
     normalized === "mtg" ||
@@ -1229,6 +1586,7 @@ function normalizePlatform(value: string | null): string | null {
   ) {
     return "magic";
   }
+
   if (
     normalized === "onepiece" ||
     normalized === "onepiecetcg" ||
@@ -1236,12 +1594,15 @@ function normalizePlatform(value: string | null): string | null {
   ) {
     return "onepiece";
   }
+
   if (normalized === "lorcana" || normalized === "disneylorcana") {
     return "lorcana";
   }
+
   if (normalized === "digimon" || normalized === "digimontcg") {
     return "digimon";
   }
+
   if (normalized === "fleshandblood" || normalized === "fab") {
     return "fleshandblood";
   }
@@ -1276,6 +1637,22 @@ function normalizeCardNumber(value: string | null): string {
     .replace(/[^a-zA-Z0-9]/g, "")
     .toUpperCase()
     .trim();
+}
+
+function slugifySetCode(value: string): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (/^op\d{1,2}$/.test(normalized)) {
+    return normalized.replace(/^op(\d{1,2})$/, (_, number) => {
+      return `op-${String(number).padStart(2, "0")}`;
+    });
+  }
+
+  return normalized;
 }
 
 function slugify(value: string): string {
