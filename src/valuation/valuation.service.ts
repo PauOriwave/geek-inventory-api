@@ -6,6 +6,7 @@ import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
 import { getDungeonMarvelsPrice } from "./sources/dungeon-marvels.source";
 import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
+import { getDvdStoreSpainPrice } from "./sources/dvd-store-spain.source";
 import { getPokemonTcgPrice } from "./sources/pokemon-tcg.source";
 import { getTcgDexPrice } from "./sources/tcgdex.source";
 import { getCardTraderPrice } from "./sources/cardtrader.source";
@@ -86,6 +87,12 @@ const sources: SourceDefinition[] = [
     priority: 92,
     categories: ["lego"],
     handler: getBrickEconomyPrice
+  },
+  {
+    name: "dvd_store_spain",
+    priority: 86,
+    categories: ["movie"],
+    handler: getDvdStoreSpainPrice
   },
   {
     name: "pokemon_tcg_api",
