@@ -9,9 +9,11 @@ type DvdStoreCandidate = {
   url: string;
   price: number | null;
   score: number;
+  source: "direct_url" | "dvd_store_search" | "public_index" | "raw_url";
 };
 
 const BASE_URL = "https://dvdstorespain.es";
+const DUCKDUCKGO_HTML_URL = "https://duckduckgo.com/html";
 const REQUEST_TIMEOUT_MS = 15000;
 
 export async function getDvdStoreSpainPrice(
@@ -27,17 +29,19 @@ export async function getDvdStoreSpainPrice(
     name: item.name,
     category: item.category,
     platform: item.platform,
-    region: item.region
+    region: item.region,
+    notes: item.notes
   });
 
-  const candidates = await searchDvdStoreSpain(query);
+  const candidates = await resolveCandidates(item, query);
 
   console.log(
     "📀 DVD Store Spain candidates:",
-    candidates.slice(0, 10).map((candidate) => ({
+    candidates.slice(0, 12).map((candidate) => ({
       title: candidate.title,
       price: candidate.price,
       score: Number(candidate.score.toFixed(2)),
+      source: candidate.source,
       url: candidate.url
     }))
   );
@@ -53,6 +57,7 @@ export async function getDvdStoreSpainPrice(
   let finalTitle = best.title;
 
   const detailHtml = await fetchHtml(best.url);
+
   if (detailHtml) {
     const detail = parseDetailPage(detailHtml, best.url);
 
@@ -61,10 +66,16 @@ export async function getDvdStoreSpainPrice(
   }
 
   if (!finalPrice || finalPrice <= 0) {
+    console.log("📀 DVD Store Spain matched but no price:", {
+      query,
+      title: finalTitle,
+      url: best.url
+    });
+
     return null;
   }
 
-  const confidence = computeConfidence(query, finalTitle, best.score);
+  const confidence = computeConfidence(query, finalTitle, best.score, best.source);
 
   return {
     price: Number(finalPrice.toFixed(2)),
@@ -79,9 +90,69 @@ export async function getDvdStoreSpainPrice(
       listingPrice: best.price,
       finalPrice,
       candidate: best,
-      candidates: candidates.slice(0, 10)
+      candidates: candidates.slice(0, 12)
     }
   };
+}
+
+async function resolveCandidates(
+  item: Item,
+  query: string
+): Promise<DvdStoreCandidate[]> {
+  const allCandidates: DvdStoreCandidate[] = [];
+  const seen = new Set<string>();
+
+  const manualUrls = extractDvdStoreUrlsFromItem(item);
+
+  for (const url of manualUrls) {
+    addCandidate(allCandidates, seen, {
+      title: titleFromUrl(url),
+      url,
+      price: null,
+      score: 3,
+      source: "direct_url"
+    });
+  }
+
+  const internalCandidates = await searchDvdStoreSpain(query);
+
+  for (const candidate of internalCandidates) {
+    addCandidate(allCandidates, seen, candidate);
+  }
+
+  const publicIndexCandidates = await searchPublicIndex(query);
+
+  for (const candidate of publicIndexCandidates) {
+    addCandidate(allCandidates, seen, candidate);
+  }
+
+  return allCandidates.sort((a, b) => b.score - a.score).slice(0, 30);
+}
+
+function extractDvdStoreUrlsFromItem(item: Item): string[] {
+  const values = [
+    item.notes,
+    item.region,
+    item.platform
+  ]
+    .map((value) => String(value || ""))
+    .filter(Boolean);
+
+  const urls: string[] = [];
+
+  for (const value of values) {
+    const matches = value.match(/https?:\/\/dvdstorespain\.es\/[^\s"'<>]+/gi);
+
+    for (const match of matches ?? []) {
+      const clean = decodeHtml(match.trim());
+
+      if (isProductUrl(clean)) {
+        urls.push(clean);
+      }
+    }
+  }
+
+  return [...new Set(urls)];
 }
 
 async function searchDvdStoreSpain(query: string): Promise<DvdStoreCandidate[]> {
@@ -95,13 +166,10 @@ async function searchDvdStoreSpain(query: string): Promise<DvdStoreCandidate[]> 
     const html = await fetchHtml(url);
     if (!html) continue;
 
-    const candidates = extractCandidates(html, query);
+    const candidates = extractCandidates(html, query, "dvd_store_search");
 
     for (const candidate of candidates) {
-      if (seen.has(candidate.url)) continue;
-
-      seen.add(candidate.url);
-      allCandidates.push(candidate);
+      addCandidate(allCandidates, seen, candidate);
     }
 
     if (allCandidates.length > 0) break;
@@ -114,16 +182,57 @@ function buildSearchUrls(query: string): string[] {
   const encoded = encodeURIComponent(query);
 
   return [
-    `${BASE_URL}/?s=${encoded}`,
-    `${BASE_URL}/es/?s=${encoded}`,
-    `${BASE_URL}/buscar?controller=search&s=${encoded}`,
-    `${BASE_URL}/es/buscar?controller=search&s=${encoded}`,
+    `${BASE_URL}/es/buscar?controller=search&search_query=${encoded}`,
+    `${BASE_URL}/buscar?controller=search&search_query=${encoded}`,
+    `${BASE_URL}/es/busqueda?controller=search&s=${encoded}`,
+    `${BASE_URL}/busqueda?controller=search&s=${encoded}`,
+    `${BASE_URL}/es/search?controller=search&s=${encoded}`,
     `${BASE_URL}/search?controller=search&s=${encoded}`,
-    `${BASE_URL}/es/search?controller=search&s=${encoded}`
+    `${BASE_URL}/?s=${encoded}`,
+    `${BASE_URL}/es/?s=${encoded}`
   ];
 }
 
-function extractCandidates(html: string, query: string): DvdStoreCandidate[] {
+async function searchPublicIndex(query: string): Promise<DvdStoreCandidate[]> {
+  const searchQuery = `site:dvdstorespain.es/es/peliculas ${query}`;
+  const url = `${DUCKDUCKGO_HTML_URL}/?q=${encodeURIComponent(searchQuery)}`;
+
+  console.log("📀 DVD Store Spain public index search:", url);
+
+  const html = await fetchHtml(url);
+  if (!html) return [];
+
+  const candidates: DvdStoreCandidate[] = [];
+  const seen = new Set<string>();
+
+  const urls = extractRawProductUrls(html);
+
+  for (const productUrl of urls) {
+    const decodedUrl = decodeDuckDuckGoRedirect(productUrl);
+    if (!isProductUrl(decodedUrl)) continue;
+
+    const title = titleFromUrl(decodedUrl);
+    const score = scoreCandidate(query, title, decodedUrl);
+
+    if (score < 0.35) continue;
+
+    addCandidate(candidates, seen, {
+      title,
+      url: decodedUrl,
+      price: null,
+      score: score + 0.3,
+      source: "public_index"
+    });
+  }
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 20);
+}
+
+function extractCandidates(
+  html: string,
+  query: string,
+  source: DvdStoreCandidate["source"]
+): DvdStoreCandidate[] {
   const $ = cheerio.load(html);
   const candidates: DvdStoreCandidate[] = [];
   const seen = new Set<string>();
@@ -131,7 +240,7 @@ function extractCandidates(html: string, query: string): DvdStoreCandidate[] {
   $("a[href]").each((_, el) => {
     const link = $(el);
     const href = decodeHtml(link.attr("href") || "");
-    const url = absolutize(href);
+    const url = absolutize(decodeDuckDuckGoRedirect(href));
 
     if (!isProductUrl(url)) return;
 
@@ -142,14 +251,18 @@ function extractCandidates(html: string, query: string): DvdStoreCandidate[] {
     const rawTitle =
       cleanTitle(link.attr("title") || "") ||
       cleanTitle(link.text()) ||
-      cleanTitle(container.find(".product-title, h2, h3, .name").first().text()) ||
+      cleanTitle(
+        container.find(".product-title, h1, h2, h3, .name").first().text()
+      ) ||
       titleFromUrl(url);
 
     const title = cleanupProductTitle(rawTitle);
     if (!title || title.length < 2) return;
 
     const containerText = container.text().replace(/\s+/g, " ").trim();
+
     const price =
+      extractPriceFromDom(container) ??
       extractFirstEuroPrice(containerText) ??
       extractFirstEuroPrice(link.text()) ??
       null;
@@ -158,31 +271,28 @@ function extractCandidates(html: string, query: string): DvdStoreCandidate[] {
 
     if (score < 0.35) return;
 
-    const key = url;
-    if (seen.has(key)) return;
-    seen.add(key);
-
-    candidates.push({
+    addCandidate(candidates, seen, {
       title,
       url,
       price,
-      score
+      score,
+      source
     });
   });
 
   extractRawProductUrls(html).forEach((url) => {
-    const title = titleFromUrl(url);
-    const score = scoreCandidate(query, title, url);
+    const decodedUrl = decodeDuckDuckGoRedirect(url);
+    const title = titleFromUrl(decodedUrl);
+    const score = scoreCandidate(query, title, decodedUrl);
 
     if (score < 0.35) return;
-    if (seen.has(url)) return;
-    seen.add(url);
 
-    candidates.push({
+    addCandidate(candidates, seen, {
       title,
-      url,
+      url: decodedUrl,
       price: null,
-      score
+      score,
+      source: "raw_url"
     });
   });
 
@@ -196,13 +306,15 @@ function parseDetailPage(
   const $ = cheerio.load(html);
 
   const title =
+    cleanTitle($("h1[itemprop='name']").first().text()) ||
     cleanTitle($("h1").first().text()) ||
     cleanTitle($("meta[property='og:title']").attr("content") || "") ||
     titleFromUrl(url);
 
   const price =
-    extractFirstEuroPrice($("body").text()) ??
+    extractPriceFromDom($("body")) ??
     extractPriceFromJsonLd(html) ??
+    extractFirstEuroPrice($("body").text()) ??
     null;
 
   if (!title && !price) return null;
@@ -213,9 +325,33 @@ function parseDetailPage(
   };
 }
 
+function extractPriceFromDom(node: cheerio.Cheerio<any>): number | null {
+  const selectors = [
+    "[itemprop='price'][content]",
+    ".current-price [itemprop='price'][content]",
+    ".current-price span[itemprop='price']",
+    ".product-price [itemprop='price'][content]",
+    ".product-prices [itemprop='price'][content]",
+    "meta[itemprop='price'][content]"
+  ];
+
+  for (const selector of selectors) {
+    const found = node.find(selector).first();
+
+    const content = found.attr("content");
+    const contentPrice = parseCardPrice(content);
+
+    if (contentPrice && contentPrice > 0) return contentPrice;
+
+    const textPrice = extractFirstEuroPrice(found.text());
+    if (textPrice && textPrice > 0) return textPrice;
+  }
+
+  return null;
+}
+
 function extractPriceFromJsonLd(html: string): number | null {
   const $ = cheerio.load(html);
-
   let found: number | null = null;
 
   $("script[type='application/ld+json']").each((_, el) => {
@@ -276,7 +412,12 @@ function parseUnknownPrice(value: unknown): number | null {
   return null;
 }
 
-function computeConfidence(query: string, title: string, score: number): number {
+function computeConfidence(
+  query: string,
+  title: string,
+  score: number,
+  source: DvdStoreCandidate["source"]
+): number {
   let confidence = 0.45;
 
   const normalizedQuery = normalizeText(query);
@@ -286,6 +427,9 @@ function computeConfidence(query: string, title: string, score: number): number 
 
   if (normalizedTitle === normalizedQuery) confidence += 0.25;
   if (normalizedTitle.includes(normalizedQuery)) confidence += 0.15;
+
+  if (source === "direct_url") confidence += 0.15;
+  if (source === "public_index") confidence += 0.08;
 
   const queryTokens = normalizedQuery
     .split(" ")
@@ -313,16 +457,14 @@ function scoreCandidate(query: string, title: string, url: string): number {
 
   if (normalizedTitle === wanted) score += 1;
   if (normalizedTitle.includes(wanted)) score += 0.7;
-  if (normalizedUrl.includes(wanted.replace(/\s+/g, "-"))) score += 0.5;
+  if (normalizedUrl.includes(wanted.replace(/\s+/g, "-"))) score += 0.7;
 
   const wantedTokens = wanted
     .split(" ")
     .filter((token) => token.length > 2);
 
   const matchedTokens = wantedTokens.filter(
-    (token) =>
-      normalizedTitle.includes(token) ||
-      normalizedUrl.includes(token)
+    (token) => normalizedTitle.includes(token) || normalizedUrl.includes(token)
   );
 
   if (wantedTokens.length > 0) {
@@ -389,7 +531,9 @@ function isProductUrl(url: string): boolean {
   }
 
   return (
+    /\/\d+[-/][^"'<>\\\s]+\.html(?:$|\?)/i.test(lowered) ||
     /-\d+\.html(?:$|\?)/i.test(lowered) ||
+    lowered.includes("/peliculas/") ||
     lowered.includes("/producto/") ||
     lowered.includes("/product/")
   );
@@ -402,13 +546,60 @@ function extractRawProductUrls(html: string): string[] {
     .replace(/%2F/gi, "/");
 
   const matches = [
-    ...decoded.matchAll(/https?:\/\/dvdstorespain\.es\/[^"'<>\\\s]+/gi),
-    ...decoded.matchAll(/\/[^"'<>\\\s]+-\d+\.html/gi)
+    ...decoded.matchAll(/https?:\/\/dvdstorespain\.es\/[^"'<>\\\s]+\.html/gi),
+    ...decoded.matchAll(
+      /\/(?:es\/)?(?:peliculas|producto|product)\/[^"'<>\\\s]+\.html/gi
+    ),
+    ...decoded.matchAll(/\/[^"'<>\\\s]*\d+[^"'<>\\\s]*\.html/gi)
   ];
 
   return matches
     .map((match) => absolutize(match[0]))
     .filter((url) => isProductUrl(url));
+}
+
+function addCandidate(
+  candidates: DvdStoreCandidate[],
+  seen: Set<string>,
+  candidate: DvdStoreCandidate
+) {
+  if (!candidate.url) return;
+
+  const url = normalizeCandidateUrl(candidate.url);
+
+  if (!isProductUrl(url)) return;
+  if (seen.has(url)) return;
+
+  seen.add(url);
+
+  candidates.push({
+    ...candidate,
+    url
+  });
+}
+
+function normalizeCandidateUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function decodeDuckDuckGoRedirect(url: string): string {
+  try {
+    const parsed = new URL(url, BASE_URL);
+    const uddg = parsed.searchParams.get("uddg");
+
+    if (uddg) return decodeURIComponent(uddg);
+
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 function cleanupProductTitle(value: string): string {
@@ -425,6 +616,7 @@ function titleFromUrl(url: string): string {
     const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
 
     return last
+      .replace(/^\d+-/i, "")
       .replace(/-\d+\.html$/i, "")
       .replace(/\.html$/i, "")
       .replace(/-/g, " ")
@@ -436,9 +628,7 @@ function titleFromUrl(url: string): string {
 }
 
 function cleanTitle(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function decodeHtml(value: string): string {
