@@ -7,6 +7,7 @@ import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source"
 import { getDungeonMarvelsPrice } from "./sources/dungeon-marvels.source";
 import { getBrickEconomyPrice } from "./sources/brickeconomy.source";
 import { getDvdStoreSpainPrice } from "./sources/dvd-store-spain.source";
+import { getGoblinTraderPrice } from "./sources/goblin-trader.source";
 import { getPokemonTcgPrice } from "./sources/pokemon-tcg.source";
 import { getTcgDexPrice } from "./sources/tcgdex.source";
 import { getCardTraderPrice } from "./sources/cardtrader.source";
@@ -81,6 +82,12 @@ const sources: SourceDefinition[] = [
     priority: 86,
     categories: ["boardgame", "comic", "tcg", "figure", "lego"],
     handler: getDungeonMarvelsPrice
+  },
+  {
+    name: "goblin_trader",
+    priority: 88,
+    categories: ["boardgame", "figure", "other"],
+    handler: getGoblinTraderPrice
   },
   {
     name: "brickeconomy",
