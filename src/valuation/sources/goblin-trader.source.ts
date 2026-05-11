@@ -15,7 +15,12 @@ type GoblinTraderCandidate = {
 const BASE_URL = "https://www.goblintrader.es";
 const REQUEST_TIMEOUT_MS = 15000;
 
-const SUPPORTED_CATEGORIES = new Set(["boardgame", "figure", "other"]);
+const SUPPORTED_CATEGORIES = new Set([
+  "boardgame",
+  "miniature",
+  "figure",
+  "other"
+]);
 
 const WARHAMMER_HINTS = [
   "warhammer",
@@ -292,7 +297,9 @@ function extractCandidates(
       cleanTitle(link.attr("title") || "") ||
       cleanTitle(link.find("img").first().attr("alt") || "") ||
       cleanTitle(link.text()) ||
-      cleanTitle(root.find("h1, h2, h3, .product-title, .title").first().text()) ||
+      cleanTitle(
+        root.find("h1, h2, h3, .product-title, .title").first().text()
+      ) ||
       titleFromUrl(url);
 
     const priceText =
@@ -413,7 +420,7 @@ function scoreCandidate(
     score += 0.4;
   }
 
-  if (item.category === "figure") {
+  if (item.category === "figure" || item.category === "miniature") {
     if (
       candidateContext.includes("miniatura") ||
       candidateContext.includes("miniature") ||
@@ -469,9 +476,9 @@ function computeConfidence(
     confidence += (matchedTokens.length / queryTokens.length) * 0.15;
   }
 
-  const itemContext = `${item.name} ${item.platform ?? ""} ${item.region ?? ""} ${
-    item.notes ?? ""
-  }`;
+  const itemContext = `${item.name} ${item.platform ?? ""} ${
+    item.region ?? ""
+  } ${item.notes ?? ""}`;
 
   if (hasWarhammerSignal(itemContext) && hasWarhammerSignal(title)) {
     confidence += 0.08;

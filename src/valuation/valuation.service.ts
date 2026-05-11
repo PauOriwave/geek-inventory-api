@@ -80,13 +80,13 @@ const sources: SourceDefinition[] = [
   {
     name: "dungeon_marvels",
     priority: 86,
-    categories: ["boardgame", "comic", "tcg", "figure", "lego"],
+    categories: ["boardgame", "miniature", "comic", "tcg", "figure", "lego"],
     handler: getDungeonMarvelsPrice
   },
   {
     name: "goblin_trader",
     priority: 88,
-    categories: ["boardgame", "figure", "other"],
+    categories: ["boardgame", "miniature", "figure", "other"],
     handler: getGoblinTraderPrice
   },
   {
