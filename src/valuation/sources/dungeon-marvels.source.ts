@@ -178,16 +178,56 @@ export async function getDungeonMarvelsPrice(
 }
 
 function buildSearchUrls(query: string): string[] {
-  const encoded = encodeURIComponent(query);
+  const queries = buildSearchQueries(query);
+  const urls: string[] = [];
 
-  return [
-    `${BASE_URL}/es/busqueda?controller=search&s=${encoded}`,
-    `${BASE_URL}/es/buscar?controller=search&search_query=${encoded}`,
-    `${BASE_URL}/es/search?controller=search&s=${encoded}`,
-    `${BASE_URL}/buscar?controller=search&search_query=${encoded}`,
-    `${BASE_URL}/busqueda?controller=search&s=${encoded}`,
-    `${BASE_URL}/search?controller=search&s=${encoded}`
-  ];
+  for (const searchQuery of queries) {
+    const encoded = encodeURIComponent(searchQuery);
+
+    urls.push(
+      `${BASE_URL}/es/busqueda?controller=search&s=${encoded}`,
+      `${BASE_URL}/es/buscar?controller=search&search_query=${encoded}`,
+      `${BASE_URL}/es/search?controller=search&s=${encoded}`,
+      `${BASE_URL}/buscar?controller=search&search_query=${encoded}`,
+      `${BASE_URL}/busqueda?controller=search&s=${encoded}`,
+      `${BASE_URL}/search?controller=search&s=${encoded}`
+    );
+  }
+
+  return [...new Set(urls)];
+}
+
+function buildSearchQueries(query: string): string[] {
+  const clean = cleanQueryForSearch(query);
+  const normalized = normalizeSearchText(clean);
+  const queries = new Set<string>();
+
+  queries.add(clean);
+
+  if (normalized.includes("combat patrol")) {
+    const faction = clean.replace(/^combat patrol\s+/i, "").trim();
+
+    queries.add(`Warhammer 40000 ${clean}`);
+    queries.add(`Warhammer 40K ${clean}`);
+
+    if (faction) {
+      queries.add(`${faction} Combat Patrol`);
+      queries.add(`Warhammer 40000 ${faction} Combat Patrol`);
+      queries.add(`Warhammer 40K ${faction} Combat Patrol`);
+      queries.add(`Patrulla de Combate ${faction}`);
+    }
+  }
+
+  if (normalized.includes("space marines")) {
+    queries.add("Space Marines Combat Patrol");
+    queries.add("Warhammer 40000 Space Marines Combat Patrol");
+    queries.add("Warhammer 40K Space Marines Combat Patrol");
+    queries.add("Patrulla de Combate Space Marines");
+  }
+
+  return [...queries]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 async function fetchHtml(url: string): Promise<string | null> {
@@ -469,7 +509,10 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
     const title = normalizeSearchText(candidate.title);
     const url = normalizeSearchText(candidate.url);
 
-    if (item.category === "tcg" && isLikelyTcgMerch(candidate.title, candidate.url)) {
+    if (
+      item.category === "tcg" &&
+      isLikelyTcgMerch(candidate.title, candidate.url)
+    ) {
       return false;
     }
 
@@ -638,6 +681,12 @@ function normalizeSearchText(value: string): string {
     .trim();
 }
 
+function cleanQueryForSearch(value: string): string {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isLikelyTcgMerch(title: string, url: string): boolean {
   const normalized = normalizeSearchText(`${title} ${url}`);
 
@@ -697,7 +746,6 @@ function normalizeLinkText(value: string): string {
     .replace(/\s+/g, " ")
     .replace(/Comprar/gi, "")
     .replace(/Añadir al carrito/gi, "")
-    .replace(/Vista rápida/gi, "")
     .trim();
 }
 
