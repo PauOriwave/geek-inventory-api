@@ -246,16 +246,56 @@ async function searchGoblinTrader(
 }
 
 function buildSearchUrls(query: string): string[] {
-  const encoded = encodeURIComponent(query);
+  const queries = buildSearchQueries(query);
+  const urls: string[] = [];
 
-  return [
-    `${BASE_URL}/es/busqueda?controller=search&s=${encoded}`,
-    `${BASE_URL}/es/buscar?controller=search&search_query=${encoded}`,
-    `${BASE_URL}/busqueda?controller=search&s=${encoded}`,
-    `${BASE_URL}/buscar?controller=search&search_query=${encoded}`,
-    `${BASE_URL}/es/search?controller=search&s=${encoded}`,
-    `${BASE_URL}/search?controller=search&s=${encoded}`
-  ];
+  for (const searchQuery of queries) {
+    const encoded = encodeURIComponent(searchQuery);
+
+    urls.push(
+      `${BASE_URL}/es/busqueda?controller=search&s=${encoded}`,
+      `${BASE_URL}/es/buscar?controller=search&search_query=${encoded}`,
+      `${BASE_URL}/busqueda?controller=search&s=${encoded}`,
+      `${BASE_URL}/buscar?controller=search&search_query=${encoded}`,
+      `${BASE_URL}/es/search?controller=search&s=${encoded}`,
+      `${BASE_URL}/search?controller=search&s=${encoded}`
+    );
+  }
+
+  return [...new Set(urls)];
+}
+
+function buildSearchQueries(query: string): string[] {
+  const clean = cleanQueryForSearch(query);
+  const normalized = normalizeSearchText(clean);
+  const queries = new Set<string>();
+
+  queries.add(clean);
+
+  if (normalized.includes("combat patrol")) {
+    const faction = clean.replace(/^combat patrol\s+/i, "").trim();
+
+    queries.add(`Warhammer 40000 ${clean}`);
+    queries.add(`Warhammer 40K ${clean}`);
+
+    if (faction) {
+      queries.add(`${faction} Combat Patrol`);
+      queries.add(`Warhammer 40000 ${faction} Combat Patrol`);
+      queries.add(`Warhammer 40K ${faction} Combat Patrol`);
+      queries.add(`Patrulla de Combate ${faction}`);
+    }
+  }
+
+  if (normalized.includes("space marines")) {
+    queries.add("Space Marines Combat Patrol");
+    queries.add("Warhammer 40000 Space Marines Combat Patrol");
+    queries.add("Warhammer 40K Space Marines Combat Patrol");
+    queries.add("Patrulla de Combate Space Marines");
+  }
+
+  return [...queries]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 function extractCandidates(
@@ -758,6 +798,12 @@ function normalizeSearchText(value: string): string {
     .replace(/\bcastellano\b/g, "")
     .replace(/\bespañol\b/g, "")
     .replace(/\bespanol\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanQueryForSearch(value: string): string {
+  return String(value || "")
     .replace(/\s+/g, " ")
     .trim();
 }
