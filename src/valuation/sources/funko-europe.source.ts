@@ -1,5 +1,4 @@
 import { Item } from "@prisma/client";
-import * as cheerio from "cheerio";
 
 import { ScraperSourceResult } from "../scraper.types";
 import { normalizeText, similarityScore } from "../utils";
@@ -10,6 +9,18 @@ type FunkoCandidate = {
   price: number | null;
   currency: "GBP" | "EUR" | "USD" | null;
   score: number;
+};
+
+type ShopifyPredictiveProduct = {
+  title?: string;
+  url?: string;
+  price?: string;
+  price_min?: string | number;
+  price_max?: string | number;
+  compare_at_price?: string | number;
+  image?: string;
+  vendor?: string;
+  product_type?: string;
 };
 
 const BASE_URL = "https://funkoeurope.com";
@@ -79,56 +90,32 @@ export async function getFunkoEuropePrice(
     return null;
   }
 
-  const detailHtml = await fetchHtml(best.url);
-
-  let finalTitle = best.title;
-  let finalPrice = best.price;
-  let finalCurrency = best.currency;
-
-  if (detailHtml) {
-    const detail = parseDetailPage(detailHtml, best.url);
-
-    if (detail.title) finalTitle = detail.title;
-    if (detail.price && detail.price > 0) finalPrice = detail.price;
-    if (detail.currency) finalCurrency = detail.currency;
-  }
-
-  if (isBlockedProduct(finalTitle, best.url)) {
-    console.log("🧸 FunkoEurope discarded blocked product:", {
-      title: finalTitle,
-      url: best.url
-    });
-
-    return null;
-  }
-
-  if (!finalPrice || finalPrice <= 0) {
+  if (!best.price || best.price <= 0) {
     console.log("🧸 FunkoEurope matched but no usable price:", {
-      title: finalTitle,
+      title: best.title,
       url: best.url
     });
 
     return null;
   }
 
-  const confidence = computeConfidence(item, query, finalTitle, best.score);
+  const confidence = computeConfidence(item, query, best.title, best.score);
 
   return {
-    price: Number(finalPrice.toFixed(2)),
-    currency: finalCurrency ?? "GBP",
+    price: Number(best.price.toFixed(2)),
+    currency: best.currency ?? "GBP",
     source: "funko_europe",
     confidence,
-    matchedTitle: finalTitle,
+    matchedTitle: best.title,
     matchedUrl: best.url,
     query,
     metadata: {
       provider: "funko_europe",
-      currency: finalCurrency ?? "GBP",
+      currency: best.currency ?? "GBP",
       category: item.category,
       platform: item.platform ?? null,
       region: item.region ?? null,
-      listingPrice: best.price,
-      finalPrice,
+      finalPrice: best.price,
       candidate: best,
       candidates: candidates.slice(0, 12)
     }
@@ -139,17 +126,19 @@ async function searchFunkoEurope(
   item: Item,
   query: string
 ): Promise<FunkoCandidate[]> {
-  const urls = buildSearchUrls(query);
+  const queries = buildSearchQueries(query);
   const allCandidates: FunkoCandidate[] = [];
   const seen = new Set<string>();
 
-  for (const url of urls) {
-    console.log("🧸 FunkoEurope searching:", url);
+  for (const searchQuery of queries) {
+    const url = buildPredictiveSearchUrl(searchQuery);
 
-    const html = await fetchHtml(url);
-    if (!html) continue;
+    console.log("🧸 FunkoEurope searching JSON:", url);
 
-    const candidates = extractCandidates(html, item, query);
+    const json = await fetchJson(url);
+    if (!json) continue;
+
+    const candidates = extractCandidatesFromPredictiveJson(json, item, query);
 
     for (const candidate of candidates) {
       const key = normalizeCandidateUrl(candidate.url);
@@ -166,29 +155,24 @@ async function searchFunkoEurope(
   return allCandidates.sort((a, b) => b.score - a.score).slice(0, 30);
 }
 
-function buildSearchUrls(query: string): string[] {
-  const queries = buildSearchQueries(query);
-  const urls: string[] = [];
+function buildPredictiveSearchUrl(query: string): string {
+  const encoded = encodeURIComponent(query);
 
-  for (const searchQuery of queries) {
-    const encoded = encodeURIComponent(searchQuery);
-
-    urls.push(
-      `${BASE_URL}/search?q=${encoded}`,
-      `${BASE_URL}/search?type=product&q=${encoded}`,
-      `${BASE_URL}/collections/pop?q=${encoded}`
-    );
-  }
-
-  return [...new Set(urls)];
+  return `${BASE_URL}/search/suggest.json?q=${encoded}&resources[type]=product&resources[limit]=10`;
 }
 
 function buildSearchQueries(query: string): string[] {
   const clean = cleanQueryForSearch(query);
+
   const withoutPop = clean
     .replace(/\bfunko\b/gi, "")
     .replace(/\bpop\b/gi, "")
     .replace(/[#!]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const withoutNumber = withoutPop
+    .replace(/\b\d{2,5}\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -202,189 +186,87 @@ function buildSearchQueries(query: string): string[] {
     queries.add(`Funko Pop ${withoutPop}`);
   }
 
+  if (withoutNumber) {
+    queries.add(withoutNumber);
+    queries.add(`Pop ${withoutNumber}`);
+  }
+
   return [...queries]
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, 5);
 }
 
-function extractCandidates(
-  html: string,
+function extractCandidatesFromPredictiveJson(
+  json: unknown,
   item: Item,
   query: string
 ): FunkoCandidate[] {
-  const $ = cheerio.load(html);
+  const products = extractProducts(json);
   const candidates: FunkoCandidate[] = [];
-  const seen = new Set<string>();
 
-  const selectors = [
-    "product-card",
-    ".product-card",
-    ".card",
-    ".grid__item",
-    "li",
-    "article",
-    "a[href*='/products/']"
-  ];
+  for (const product of products) {
+    const title = cleanTitle(product.title ?? "");
+    const url = absolutize(product.url ?? "");
 
-  for (const selector of selectors) {
-    $(selector).each((_, el) => {
-      const root = $(el);
+    if (!title || !isProductUrl(url)) continue;
+    if (isBlockedProduct(title, url)) continue;
 
-      const href =
-        root.find("a[href*='/products/']").first().attr("href") ||
-        (root.is("a") ? root.attr("href") : "") ||
-        "";
-
-      const url = absolutize(href);
-
-      if (!isProductUrl(url)) return;
-
-      const title =
-        cleanTitle(root.find("a[href*='/products/']").first().attr("aria-label") || "") ||
-        cleanTitle(root.find("a[href*='/products/']").first().attr("title") || "") ||
-        cleanTitle(root.find("img").first().attr("alt") || "") ||
-        cleanTitle(root.find(".card__heading").first().text()) ||
-        cleanTitle(root.find(".product-card__title").first().text()) ||
-        cleanTitle(root.find("h2, h3").first().text()) ||
-        cleanTitle(root.text()) ||
-        titleFromUrl(url);
-
-      if (!title) return;
-      if (isBlockedProduct(title, url)) return;
-
-      const priceText =
-        root.find(".price").first().text().trim() ||
-        root.find("[class*='price']").first().text().trim() ||
-        root.text();
-
-      const parsedPrice = parsePrice(priceText);
-      const score = scoreCandidate(item, query, title, url);
-
-      if (score < 0.35) return;
-
-      addCandidate(candidates, seen, {
-        title,
-        url,
-        price: parsedPrice.price,
-        currency: parsedPrice.currency,
-        score
-      });
-    });
-  }
-
-  extractRawProductUrls(html).forEach((url) => {
-    const title = titleFromUrl(url);
-
-    if (!title) return;
-    if (isBlockedProduct(title, url)) return;
-
+    const parsedPrice = parseProductPrice(product);
     const score = scoreCandidate(item, query, title, url);
 
-    if (score < 0.35) return;
+    if (score < 0.35) continue;
 
-    addCandidate(candidates, seen, {
+    candidates.push({
       title,
       url,
-      price: null,
-      currency: null,
+      price: parsedPrice.price,
+      currency: parsedPrice.currency,
       score
     });
-  });
+  }
 
   return candidates.sort((a, b) => b.score - a.score);
 }
 
-function addCandidate(
-  candidates: FunkoCandidate[],
-  seen: Set<string>,
-  candidate: FunkoCandidate
-) {
-  const url = normalizeCandidateUrl(candidate.url);
+function extractProducts(json: unknown): ShopifyPredictiveProduct[] {
+  if (!json || typeof json !== "object") return [];
 
-  if (!isProductUrl(url)) return;
-  if (seen.has(url)) return;
+  const root = json as Record<string, unknown>;
+  const resources = root.resources as Record<string, unknown> | undefined;
+  const results = resources?.results as Record<string, unknown> | undefined;
+  const products = results?.products;
 
-  const title = cleanTitle(candidate.title || titleFromUrl(url));
+  if (Array.isArray(products)) {
+    return products as ShopifyPredictiveProduct[];
+  }
 
-  if (!title) return;
-  if (isBlockedProduct(title, url)) return;
-
-  seen.add(url);
-
-  candidates.push({
-    ...candidate,
-    title,
-    url
-  });
+  return [];
 }
 
-function parseDetailPage(
-  html: string,
-  url: string
-): { title: string | null; price: number | null; currency: "GBP" | "EUR" | "USD" | null } {
-  const $ = cheerio.load(html);
-
-  const title =
-    cleanTitle($("h1").first().text()) ||
-    cleanTitle($("meta[property='og:title']").attr("content") || "") ||
-    titleFromUrl(url) ||
-    null;
-
-  const priceCandidates = [
-    $("meta[property='product:price:amount']").attr("content"),
-    $("meta[itemprop='price']").attr("content"),
-    $("[itemprop='price']").first().attr("content"),
-    $("[itemprop='price']").first().text(),
-    $(".price").first().text(),
-    $("[class*='price']").first().text(),
-    extractProductJsonPrice(html)
+function parseProductPrice(product: ShopifyPredictiveProduct): {
+  price: number | null;
+  currency: "GBP" | "EUR" | "USD" | null;
+} {
+  const candidates = [
+    product.price,
+    product.price_min,
+    product.price_max,
+    product.compare_at_price
   ];
 
-  for (const value of priceCandidates) {
-    const parsed = parsePrice(value);
+  for (const candidate of candidates) {
+    const parsed = parsePrice(candidate);
 
     if (parsed.price && parsed.price > 0) {
-      console.log("🧸 FunkoEurope detail parsed:", {
-        url,
-        title,
-        price: parsed.price,
-        currency: parsed.currency
-      });
-
-      return {
-        title,
-        price: parsed.price,
-        currency: parsed.currency
-      };
+      return parsed;
     }
   }
 
-  console.log("🧸 FunkoEurope detail parsed:", {
-    url,
-    title,
-    price: null,
-    currency: null
-  });
-
   return {
-    title,
     price: null,
     currency: null
   };
-}
-
-function extractProductJsonPrice(html: string): string | null {
-  const matches = [
-    ...html.matchAll(/"price"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g),
-    ...html.matchAll(/"amount"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g)
-  ];
-
-  const prices = matches
-    .map((match) => String(match[1] || "").trim())
-    .filter(Boolean);
-
-  return prices[0] ?? null;
 }
 
 function scoreCandidate(
@@ -431,6 +313,7 @@ function computeConfidence(
 ): number {
   const wanted = normalizeSearchText(query);
   const matched = normalizeSearchText(title);
+
   const wantedTokens = getImportantTokens(normalizeSearchText(item.name));
   const matchedTokens = wantedTokens.filter((token) => matched.includes(token));
 
@@ -456,7 +339,7 @@ function computeConfidence(
   return Math.max(0.35, Math.min(0.92, Number(confidence.toFixed(2))));
 }
 
-function parsePrice(value: string | null | undefined): {
+function parsePrice(value: unknown): {
   price: number | null;
   currency: "GBP" | "EUR" | "USD" | null;
 } {
@@ -563,36 +446,14 @@ function isBlockedProduct(title: string, url: string): boolean {
   );
 }
 
-function extractRawProductUrls(html: string): string[] {
-  const normalizedHtml = decodeHtml(html)
-    .replace(/\\u002F/g, "/")
-    .replace(/\\\//g, "/")
-    .replace(/%2F/gi, "/");
-
-  const urls: string[] = [];
-
-  const patterns = [
-    /https?:\/\/funkoeurope\.com\/products\/[^"'<>\\\s?]+/gi,
-    /\/products\/[^"'<>\\\s?]+/gi
-  ];
-
-  for (const pattern of patterns) {
-    for (const match of normalizedHtml.matchAll(pattern)) {
-      const url = absolutize(match[0]);
-
-      if (isProductUrl(url)) {
-        urls.push(url);
-      }
-    }
-  }
-
-  return [...new Set(urls)];
-}
-
 function isProductUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.hostname.includes("funkoeurope.com") && parsed.pathname.includes("/products/");
+
+    return (
+      parsed.hostname.includes("funkoeurope.com") &&
+      parsed.pathname.includes("/products/")
+    );
   } catch {
     return false;
   }
@@ -608,20 +469,6 @@ function normalizeCandidateUrl(url: string): string {
     return parsed.toString();
   } catch {
     return url;
-  }
-}
-
-function titleFromUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
-
-    return last
-      .replace(/-/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  } catch {
-    return "";
   }
 }
 
@@ -677,15 +524,6 @@ function cleanTitle(value: string): string {
     .trim();
 }
 
-function decodeHtml(value: string): string {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#039;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
 function absolutize(href: string): string {
   if (!href) return "";
 
@@ -699,7 +537,7 @@ function absolutize(href: string): string {
   return `${BASE_URL}/${href}`;
 }
 
-async function fetchHtml(url: string): Promise<string | null> {
+async function fetchJson(url: string): Promise<unknown | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -710,15 +548,14 @@ async function fetchHtml(url: string): Promise<string | null> {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127.0 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        Accept: "application/json",
         "Accept-Language": "en-GB,en;q=0.9,es;q=0.8",
         Referer: BASE_URL
       }
     });
 
     if (!res.ok) {
-      console.log("❌ FunkoEurope fetch failed:", {
+      console.log("❌ FunkoEurope JSON fetch failed:", {
         status: res.status,
         url
       });
@@ -726,9 +563,22 @@ async function fetchHtml(url: string): Promise<string | null> {
       return null;
     }
 
-    return await res.text();
+    const contentType = res.headers.get("content-type") || "";
+    const text = await res.text();
+
+    if (!contentType.includes("application/json")) {
+      console.log("❌ FunkoEurope returned non-json response:", {
+        contentType,
+        url,
+        preview: text.slice(0, 120)
+      });
+
+      return null;
+    }
+
+    return JSON.parse(text);
   } catch (error) {
-    console.log("❌ FunkoEurope fetch error:", {
+    console.log("❌ FunkoEurope JSON fetch error:", {
       url,
       error
     });
