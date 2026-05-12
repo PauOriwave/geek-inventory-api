@@ -14,6 +14,7 @@ const REQUEST_TIMEOUT_MS = 15000;
 
 const SUPPORTED_CATEGORIES = new Set([
   "boardgame",
+  "miniature",
   "comic",
   "tcg",
   "figure",
@@ -49,6 +50,35 @@ const TCG_MERCH_TOKENS = [
   "accessory"
 ];
 
+const MINIATURE_BLOCKED_TITLE_TOKENS = [
+  "codex",
+  "index cards",
+  "datacards",
+  "data cards",
+  "dados",
+  "dice",
+  "cartas",
+  "cards",
+  "battletome",
+  "libro",
+  "book"
+];
+
+const MINIATURE_REQUIRED_EQUIVALENCES = [
+  {
+    wanted: ["combat patrol"],
+    accepted: ["combat patrol", "patrulla de combate"]
+  },
+  {
+    wanted: ["battleforce"],
+    accepted: ["battleforce"]
+  },
+  {
+    wanted: ["kill team"],
+    accepted: ["kill team"]
+  }
+];
+
 export async function getDungeonMarvelsPrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
@@ -67,7 +97,7 @@ export async function getDungeonMarvelsPrice(
 
     console.log("🎲 DM html length:", html.length);
 
-    const candidates = extractCandidates(html);
+    const candidates = extractCandidates(html, item);
 
     console.log("🎲 DM candidates:", candidates.length);
 
@@ -87,6 +117,18 @@ export async function getDungeonMarvelsPrice(
     const detailPrice = detail?.price ?? null;
     const detailTitle = detail?.title ?? null;
 
+    const matchedTitle = detailTitle || best.title;
+
+    if (isInvalidMiniatureMatch(item, matchedTitle, best.url)) {
+      console.log("🎲 DM discarded invalid miniature detail match:", {
+        query,
+        title: matchedTitle,
+        url: best.url
+      });
+
+      continue;
+    }
+
     const finalPrice = chooseFinalPrice(best.price, detailPrice);
 
     if (!finalPrice || finalPrice <= 0) {
@@ -99,7 +141,6 @@ export async function getDungeonMarvelsPrice(
       continue;
     }
 
-    const matchedTitle = detailTitle || best.title;
     const confidence = computeConfidence(item, matchedTitle);
 
     console.log("🎲 DM selected:", {
@@ -181,20 +222,21 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-function extractCandidates(html: string): Candidate[] {
+function extractCandidates(html: string, item: Item): Candidate[] {
   const $ = cheerio.load(html);
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
 
-  extractProductCards($, candidates, seen);
-  extractProductLinks($, candidates, seen);
-  extractRawProductUrls(html, candidates, seen);
+  extractProductCards($, item, candidates, seen);
+  extractProductLinks($, item, candidates, seen);
+  extractRawProductUrls(html, item, candidates, seen);
 
   return candidates;
 }
 
 function extractProductCards(
   $: cheerio.CheerioAPI,
+  item: Item,
   candidates: Candidate[],
   seen: Set<string>
 ) {
@@ -232,6 +274,8 @@ function extractProductCards(
         root.find("img[alt]").first().attr("alt")?.trim() ||
         titleFromProductUrl(url);
 
+      if (isInvalidMiniatureMatch(item, title, url)) return;
+
       const priceText =
         root.find(".product-price-and-shipping .price").first().text().trim() ||
         root.find(".price").first().text().trim() ||
@@ -254,6 +298,7 @@ function extractProductCards(
 
 function extractProductLinks(
   $: cheerio.CheerioAPI,
+  item: Item,
   candidates: Candidate[],
   seen: Set<string>
 ) {
@@ -278,6 +323,8 @@ function extractProductLinks(
       root.find("h1, h2, h3, .product-title, .title").first().text().trim() ||
       titleFromProductUrl(url);
 
+    if (isInvalidMiniatureMatch(item, title, url)) return;
+
     const priceText =
       root.find(".product-price-and-shipping .price").first().text().trim() ||
       root.find(".price").first().text().trim() ||
@@ -299,6 +346,7 @@ function extractProductLinks(
 
 function extractRawProductUrls(
   html: string,
+  item: Item,
   candidates: Candidate[],
   seen: Set<string>
 ) {
@@ -319,8 +367,12 @@ function extractRawProductUrls(
 
       if (!looksLikeProductUrl(url)) continue;
 
+      const title = titleFromProductUrl(url);
+
+      if (isInvalidMiniatureMatch(item, title, url)) continue;
+
       addCandidate({
-        title: titleFromProductUrl(url),
+        title,
         href: url,
         priceText: "",
         candidates,
@@ -418,6 +470,10 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
     const url = normalizeSearchText(candidate.url);
 
     if (item.category === "tcg" && isLikelyTcgMerch(candidate.title, candidate.url)) {
+      return false;
+    }
+
+    if (isInvalidMiniatureMatch(item, candidate.title, candidate.url)) {
       return false;
     }
 
@@ -594,6 +650,31 @@ function getTcgMerchPenalty(title: string, url: string): number {
   return isLikelyTcgMerch(title, url) ? 0.8 : 0;
 }
 
+function isInvalidMiniatureMatch(item: Item, title: string, url: string): boolean {
+  if (item.category !== "miniature") return false;
+
+  const wanted = normalizeSearchText(item.name);
+  const candidate = normalizeSearchText(`${title} ${url}`);
+
+  for (const rule of MINIATURE_REQUIRED_EQUIVALENCES) {
+    const wantedHasRule = rule.wanted.some((token) =>
+      wanted.includes(normalizeSearchText(token))
+    );
+
+    if (!wantedHasRule) continue;
+
+    const candidateHasAccepted = rule.accepted.some((token) =>
+      candidate.includes(normalizeSearchText(token))
+    );
+
+    if (!candidateHasAccepted) return true;
+  }
+
+  return MINIATURE_BLOCKED_TITLE_TOKENS.some((token) =>
+    candidate.includes(normalizeSearchText(token))
+  );
+}
+
 function cleanQuery(value: string): string {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -683,6 +764,10 @@ function computeConfidence(item: Item, matchedTitle: string): number {
 
   if (item.category === "tcg" && isLikelyTcgMerch(matchedTitle, "")) {
     confidence -= 0.25;
+  }
+
+  if (isInvalidMiniatureMatch(item, matchedTitle, "")) {
+    confidence -= 0.35;
   }
 
   return Math.max(0.2, Math.min(0.92, Number(confidence.toFixed(2))));

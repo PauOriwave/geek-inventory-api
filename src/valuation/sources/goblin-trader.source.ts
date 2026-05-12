@@ -40,6 +40,35 @@ const WARHAMMER_HINTS = [
   "battletome"
 ];
 
+const MINIATURE_BLOCKED_TITLE_TOKENS = [
+  "codex",
+  "index cards",
+  "datacards",
+  "data cards",
+  "dados",
+  "dice",
+  "cartas",
+  "cards",
+  "battletome",
+  "libro",
+  "book"
+];
+
+const MINIATURE_REQUIRED_EQUIVALENCES = [
+  {
+    wanted: ["combat patrol"],
+    accepted: ["combat patrol", "patrulla de combate"]
+  },
+  {
+    wanted: ["battleforce"],
+    accepted: ["battleforce"]
+  },
+  {
+    wanted: ["kill team"],
+    accepted: ["kill team"]
+  }
+];
+
 export async function getGoblinTraderPrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
@@ -87,6 +116,16 @@ export async function getGoblinTraderPrice(
 
     if (detail?.title) finalTitle = detail.title;
     if (detail?.price && detail.price > 0) finalPrice = detail.price;
+  }
+
+  if (isInvalidMiniatureMatch(item, finalTitle, best.url)) {
+    console.log("🧌 GoblinTrader discarded invalid miniature detail match:", {
+      query,
+      title: finalTitle,
+      url: best.url
+    });
+
+    return null;
   }
 
   if (!finalPrice || finalPrice <= 0) {
@@ -261,6 +300,8 @@ function extractCandidates(
         cleanTitle(root.find("img[alt]").first().attr("alt") || "") ||
         titleFromUrl(url);
 
+      if (isInvalidMiniatureMatch(item, title, url)) return;
+
       const priceText =
         root.find(".product-price-and-shipping .price").first().text().trim() ||
         root.find(".price").first().text().trim() ||
@@ -302,6 +343,8 @@ function extractCandidates(
       ) ||
       titleFromUrl(url);
 
+    if (isInvalidMiniatureMatch(item, title, url)) return;
+
     const priceText =
       root.find(".product-price-and-shipping .price").first().text().trim() ||
       root.find(".price").first().text().trim() ||
@@ -326,6 +369,9 @@ function extractCandidates(
 
   extractRawProductUrls(html).forEach((url) => {
     const title = titleFromUrl(url);
+
+    if (isInvalidMiniatureMatch(item, title, url)) return;
+
     const score = scoreCandidate(item, query, title, url);
 
     if (score < 0.35) return;
@@ -393,6 +439,18 @@ function scoreCandidate(
   const normalizedTitle = normalizeSearchText(title);
   const normalizedUrl = normalizeSearchText(url).replace(/\s+/g, "-");
 
+  const itemContext = normalizeSearchText(
+    `${item.name} ${item.platform ?? ""} ${item.region ?? ""} ${
+      item.notes ?? ""
+    }`
+  );
+
+  const candidateContext = normalizeSearchText(`${title} ${url}`);
+
+  if (isInvalidMiniatureMatch(item, title, url)) {
+    return 0;
+  }
+
   score += similarityScore(wanted, normalizedTitle);
 
   if (normalizedTitle === wanted) score += 1;
@@ -407,14 +465,6 @@ function scoreCandidate(
   if (wantedTokens.length > 0) {
     score += (matchedTokens.length / wantedTokens.length) * 0.8;
   }
-
-  const itemContext = normalizeSearchText(
-    `${item.name} ${item.platform ?? ""} ${item.region ?? ""} ${
-      item.notes ?? ""
-    }`
-  );
-
-  const candidateContext = normalizeSearchText(`${title} ${url}`);
 
   if (hasWarhammerSignal(itemContext) && hasWarhammerSignal(candidateContext)) {
     score += 0.4;
@@ -485,6 +535,31 @@ function computeConfidence(
   }
 
   return Math.max(0.45, Math.min(0.92, Number(confidence.toFixed(2))));
+}
+
+function isInvalidMiniatureMatch(item: Item, title: string, url: string): boolean {
+  if (item.category !== "miniature") return false;
+
+  const wanted = normalizeSearchText(item.name);
+  const candidate = normalizeSearchText(`${title} ${url}`);
+
+  for (const rule of MINIATURE_REQUIRED_EQUIVALENCES) {
+    const wantedHasRule = rule.wanted.some((token) =>
+      wanted.includes(normalizeSearchText(token))
+    );
+
+    if (!wantedHasRule) continue;
+
+    const candidateHasAccepted = rule.accepted.some((token) =>
+      candidate.includes(normalizeSearchText(token))
+    );
+
+    if (!candidateHasAccepted) return true;
+  }
+
+  return MINIATURE_BLOCKED_TITLE_TOKENS.some((token) =>
+    candidate.includes(normalizeSearchText(token))
+  );
 }
 
 function parsePrice(text: string | null | undefined): number | null {
