@@ -15,6 +15,7 @@ import { getScryfallPrice } from "./sources/scryfall.source";
 import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
+import { getFunkoEuropePrice } from "./sources/funko-europe.source";
 
 import {
   ScraperAttemptLog,
@@ -78,6 +79,12 @@ const sources: SourceDefinition[] = [
     handler: getJuegosMesaRedondaPrice
   },
   {
+    name: "funko_europe",
+    priority: 90,
+    categories: ["figure"],
+    handler: getFunkoEuropePrice
+  },
+  {
     name: "dungeon_marvels",
     priority: 86,
     categories: ["boardgame", "miniature", "comic", "tcg", "figure", "lego"],
@@ -134,6 +141,22 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
     source.categories.includes(item.category)
   );
 
+  if (item.category === "figure") {
+    const platform = normalizePlatform(item.platform);
+
+    if (platform === "funko_pop") {
+      return categorySources.filter((source) =>
+        ["funko_europe", "dungeon_marvels", "goblin_trader"].includes(
+          source.name
+        )
+      );
+    }
+
+    return categorySources.filter((source) =>
+      ["dungeon_marvels", "goblin_trader"].includes(source.name)
+    );
+  }
+
   if (item.category !== "tcg") return categorySources;
 
   const platform = normalizePlatform(item.platform);
@@ -174,6 +197,15 @@ function normalizePlatform(value: string | null): string | null {
     .trim();
 
   if (!normalized) return null;
+
+  if (
+    normalized === "funko" ||
+    normalized === "funkopop" ||
+    normalized === "pop" ||
+    normalized === "pops"
+  ) {
+    return "funko_pop";
+  }
 
   if (
     normalized === "pokemon" ||
