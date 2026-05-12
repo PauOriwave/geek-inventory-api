@@ -16,6 +16,7 @@ import { getNormaComicsPrice } from "./sources/norma-comics.source";
 import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
 import { getFunkoEuropePrice } from "./sources/funko-europe.source";
+import { getPriceChartingFunkoPrice } from "./sources/pricecharting-funko.source";
 
 import {
   ScraperAttemptLog,
@@ -77,6 +78,12 @@ const sources: SourceDefinition[] = [
     priority: 85,
     categories: ["boardgame"],
     handler: getJuegosMesaRedondaPrice
+  },
+  {
+    name: "pricecharting_funko",
+    priority: 94,
+    categories: ["figure"],
+    handler: getPriceChartingFunkoPrice
   },
   {
     name: "funko_europe",
@@ -144,11 +151,14 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (item.category === "figure") {
     const platform = normalizePlatform(item.platform);
 
-    if (platform === "funko_pop") {
+    if (platform === "funko_pop" || isFunkoPopItem(item)) {
       return categorySources.filter((source) =>
-        ["funko_europe", "dungeon_marvels", "goblin_trader"].includes(
-          source.name
-        )
+        [
+          "pricecharting_funko",
+          "funko_europe",
+          "dungeon_marvels",
+          "goblin_trader"
+        ].includes(source.name)
       );
     }
 
@@ -254,6 +264,15 @@ function normalizePlatform(value: string | null): string | null {
   }
 
   return normalized;
+}
+
+function isFunkoPopItem(item: Item): boolean {
+  const text = `${item.name} ${item.platform ?? ""}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  return text.includes("funko pop") || text.includes("funko");
 }
 
 function buildCacheKey(item: Item) {
