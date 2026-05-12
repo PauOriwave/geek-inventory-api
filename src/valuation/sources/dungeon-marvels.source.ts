@@ -1,3 +1,5 @@
+// src/valuation/sources/dungeon-marvels.source.ts
+
 import { Item } from "@prisma/client";
 import * as cheerio from "cheerio";
 import { normalizeText, parseEuroPrice, similarityScore } from "../utils";
@@ -10,15 +12,15 @@ type Candidate = {
 };
 
 const BASE_URL = "https://dungeonmarvels.com";
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 8000;
 
 const SUPPORTED_CATEGORIES = new Set([
   "boardgame",
-  "miniature",
   "comic",
   "tcg",
   "figure",
-  "lego"
+  "lego",
+  "miniature"
 ]);
 
 const TCG_MERCH_TOKENS = [
@@ -50,41 +52,13 @@ const TCG_MERCH_TOKENS = [
   "accessory"
 ];
 
-const MINIATURE_BLOCKED_TITLE_TOKENS = [
-  "codex",
-  "index cards",
-  "datacards",
-  "data cards",
-  "dados",
-  "dice",
-  "cartas",
-  "cards",
-  "battletome",
-  "libro",
-  "book"
-];
-
-const MINIATURE_REQUIRED_EQUIVALENCES = [
-  {
-    wanted: ["combat patrol"],
-    accepted: ["combat patrol", "patrulla de combate"]
-  },
-  {
-    wanted: ["battleforce"],
-    accepted: ["battleforce"]
-  },
-  {
-    wanted: ["kill team"],
-    accepted: ["kill team"]
-  }
-];
-
 export async function getDungeonMarvelsPrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
   if (!SUPPORTED_CATEGORIES.has(item.category)) return null;
 
   const query = cleanQuery(item.name);
+
   if (!query) return null;
 
   const searchUrls = buildSearchUrls(query);
@@ -93,18 +67,16 @@ export async function getDungeonMarvelsPrice(
     console.log("🎲 DM Searching:", searchUrl);
 
     const html = await fetchHtml(searchUrl);
+
     if (!html) continue;
 
     console.log("🎲 DM html length:", html.length);
 
-    const candidates = extractCandidates(html, item);
+    const candidates = extractCandidates(html);
 
     console.log("🎲 DM candidates:", candidates.length);
 
-    if (candidates.length === 0) {
-      logHtmlDiagnostics(html);
-      continue;
-    }
+    if (candidates.length === 0) continue;
 
     const best = pickBestCandidate(item, candidates);
 
@@ -114,39 +86,17 @@ export async function getDungeonMarvelsPrice(
     }
 
     const detail = await fetchDetail(best.url);
-    const detailPrice = detail?.price ?? null;
-    const detailTitle = detail?.title ?? null;
 
-    const matchedTitle = detailTitle || best.title;
+    const finalPrice = chooseFinalPrice(best.price, detail?.price ?? null);
 
-    if (isInvalidMiniatureMatch(item, matchedTitle, best.url)) {
-      console.log("🎲 DM discarded invalid miniature detail match:", {
-        query,
-        title: matchedTitle,
-        url: best.url
-      });
+    if (!finalPrice || finalPrice <= 0) continue;
 
-      continue;
-    }
-
-    const finalPrice = chooseFinalPrice(best.price, detailPrice);
-
-    if (!finalPrice || finalPrice <= 0) {
-      console.log("🎲 DM matched product but no usable price:", {
-        title: best.title,
-        url: best.url,
-        listingPrice: best.price,
-        detailPrice
-      });
-      continue;
-    }
+    const matchedTitle = detail?.title || best.title;
 
     const confidence = computeConfidence(item, matchedTitle);
 
     console.log("🎲 DM selected:", {
       title: matchedTitle,
-      listingPrice: best.price,
-      detailPrice,
       finalPrice,
       confidence,
       url: best.url
@@ -163,12 +113,8 @@ export async function getDungeonMarvelsPrice(
       metadata: {
         provider: "dungeon_marvels",
         currency: "EUR",
-        listingPrice: best.price,
-        detailPrice,
-        finalPrice,
         category: item.category,
         platform: item.platform ?? null,
-        antiMerchProtected: item.category === "tcg",
         url: best.url
       }
     };
@@ -179,6 +125,7 @@ export async function getDungeonMarvelsPrice(
 
 function buildSearchUrls(query: string): string[] {
   const queries = buildSearchQueries(query);
+
   const urls: string[] = [];
 
   for (const searchQuery of queries) {
@@ -186,11 +133,7 @@ function buildSearchUrls(query: string): string[] {
 
     urls.push(
       `${BASE_URL}/es/busqueda?controller=search&s=${encoded}`,
-      `${BASE_URL}/es/buscar?controller=search&search_query=${encoded}`,
-      `${BASE_URL}/es/search?controller=search&s=${encoded}`,
-      `${BASE_URL}/buscar?controller=search&search_query=${encoded}`,
-      `${BASE_URL}/busqueda?controller=search&s=${encoded}`,
-      `${BASE_URL}/search?controller=search&s=${encoded}`
+      `${BASE_URL}/es/buscar?controller=search&search_query=${encoded}`
     );
   }
 
@@ -199,7 +142,9 @@ function buildSearchUrls(query: string): string[] {
 
 function buildSearchQueries(query: string): string[] {
   const clean = cleanQueryForSearch(query);
+
   const normalized = normalizeSearchText(clean);
+
   const queries = new Set<string>();
 
   queries.add(clean);
@@ -207,31 +152,26 @@ function buildSearchQueries(query: string): string[] {
   if (normalized.includes("combat patrol")) {
     const faction = clean.replace(/^combat patrol\s+/i, "").trim();
 
-    queries.add(`Warhammer 40000 ${clean}`);
-    queries.add(`Warhammer 40K ${clean}`);
-
     if (faction) {
       queries.add(`${faction} Combat Patrol`);
-      queries.add(`Warhammer 40000 ${faction} Combat Patrol`);
-      queries.add(`Warhammer 40K ${faction} Combat Patrol`);
       queries.add(`Patrulla de Combate ${faction}`);
     }
   }
 
   if (normalized.includes("space marines")) {
     queries.add("Space Marines Combat Patrol");
-    queries.add("Warhammer 40000 Space Marines Combat Patrol");
-    queries.add("Warhammer 40K Space Marines Combat Patrol");
     queries.add("Patrulla de Combate Space Marines");
   }
 
   return [...queries]
     .map((value) => value.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, 3);
 }
 
 async function fetchHtml(url: string): Promise<string | null> {
   const controller = new AbortController();
+
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
@@ -262,116 +202,31 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-function extractCandidates(html: string, item: Item): Candidate[] {
+function extractCandidates(html: string): Candidate[] {
   const $ = cheerio.load(html);
+
   const candidates: Candidate[] = [];
+
   const seen = new Set<string>();
 
-  extractProductCards($, item, candidates, seen);
-  extractProductLinks($, item, candidates, seen);
-  extractRawProductUrls(html, item, candidates, seen);
+  $(".product-miniature, .js-product, article").each((_, el) => {
+    const root = $(el);
 
-  return candidates;
-}
+    const href =
+      root.find("a[href*='.html']").first().attr("href") || "";
 
-function extractProductCards(
-  $: cheerio.CheerioAPI,
-  item: Item,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  const selectors = [
-    ".js-product",
-    ".product-miniature",
-    ".product",
-    ".product-item",
-    ".thumbnail-container",
-    "article.product-miniature",
-    "article",
-    "li"
-  ];
-
-  for (const selector of selectors) {
-    $(selector).each((_, el) => {
-      const root = $(el);
-
-      const href =
-        root.find("a[href*='.html']").first().attr("href") ||
-        root.find("a[href]").first().attr("href") ||
-        "";
-
-      const url = absolutize(href);
-
-      if (!looksLikeProductUrl(url)) return;
-
-      const title =
-        root.find(".product-title a").first().text().trim() ||
-        root.find(".product-title").first().text().trim() ||
-        root.find(".h3.product-title").first().text().trim() ||
-        root.find("h2").first().text().trim() ||
-        root.find("h3").first().text().trim() ||
-        root.find("a[title]").first().attr("title")?.trim() ||
-        root.find("img[alt]").first().attr("alt")?.trim() ||
-        titleFromProductUrl(url);
-
-      if (isInvalidMiniatureMatch(item, title, url)) return;
-
-      const priceText =
-        root.find(".product-price-and-shipping .price").first().text().trim() ||
-        root.find(".price").first().text().trim() ||
-        root.find(".current-price").first().text().trim() ||
-        root.find("[itemprop='price']").first().attr("content") ||
-        root.find("[itemprop='price']").first().text().trim() ||
-        root.text();
-
-      addCandidate({
-        title,
-        href: url,
-        priceText,
-        candidates,
-        seen,
-        allowNullPrice: true
-      });
-    });
-  }
-}
-
-function extractProductLinks(
-  $: cheerio.CheerioAPI,
-  item: Item,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  $("a[href]").each((_, el) => {
-    const link = $(el);
-    const href = link.attr("href") || "";
     const url = absolutize(href);
 
     if (!looksLikeProductUrl(url)) return;
 
-    const root = link.closest("li, article, div, section");
-
     const title =
-      link.attr("title")?.trim() ||
-      link.find("img").first().attr("alt")?.trim() ||
-      normalizeLinkText(link.text()) ||
-      root
-        .find("h1, h2, h3, .product-title, .title, img[alt]")
-        .first()
-        .attr("alt")
-        ?.trim() ||
-      root.find("h1, h2, h3, .product-title, .title").first().text().trim() ||
+      root.find(".product-title").first().text().trim() ||
+      root.find("h2").first().text().trim() ||
+      root.find("h3").first().text().trim() ||
       titleFromProductUrl(url);
 
-    if (isInvalidMiniatureMatch(item, title, url)) return;
-
     const priceText =
-      root.find(".product-price-and-shipping .price").first().text().trim() ||
-      root.find(".price").first().text().trim() ||
-      root.find(".current-price").first().text().trim() ||
-      root.find("[itemprop='price']").first().attr("content") ||
-      root.find("[itemprop='price']").first().text().trim() ||
-      root.text();
+      root.find(".price").first().text().trim() || "";
 
     addCandidate({
       title,
@@ -382,45 +237,8 @@ function extractProductLinks(
       allowNullPrice: true
     });
   });
-}
 
-function extractRawProductUrls(
-  html: string,
-  item: Item,
-  candidates: Candidate[],
-  seen: Set<string>
-) {
-  const normalizedHtml = decodeHtml(html)
-    .replace(/\\u002F/g, "/")
-    .replace(/\\\//g, "/")
-    .replace(/%2F/gi, "/");
-
-  const patterns = [
-    /https?:\/\/dungeonmarvels\.com\/[^"'<>\\\s]+\.html/gi,
-    /\/[^"'<>\\\s]+\.html/gi
-  ];
-
-  for (const pattern of patterns) {
-    for (const match of normalizedHtml.matchAll(pattern)) {
-      const rawUrl = match[0];
-      const url = absolutize(rawUrl);
-
-      if (!looksLikeProductUrl(url)) continue;
-
-      const title = titleFromProductUrl(url);
-
-      if (isInvalidMiniatureMatch(item, title, url)) continue;
-
-      addCandidate({
-        title,
-        href: url,
-        priceText: "",
-        candidates,
-        seen,
-        allowNullPrice: true
-      });
-    }
-  }
+  return candidates;
 }
 
 function addCandidate(input: {
@@ -435,21 +253,21 @@ function addCandidate(input: {
 
   if (!looksLikeProductUrl(url)) return;
 
-  const title = cleanTitle(input.title || titleFromProductUrl(url));
+  const title = cleanTitle(input.title);
+
   const price = parsePrice(input.priceText);
 
   if (!title || !url) return;
 
-  if ((price == null || price <= 0) && !input.allowNullPrice) return;
-
-  const key = `${normalizeText(title)}|${price ?? "null"}|${url}`;
+  const key = `${normalizeText(title)}|${url}`;
 
   if (input.seen.has(key)) return;
+
   input.seen.add(key);
 
   input.candidates.push({
     title,
-    price: price != null && price > 0 ? price : null,
+    price,
     url
   });
 }
@@ -458,47 +276,36 @@ async function fetchDetail(
   url: string
 ): Promise<{ title: string | null; price: number | null } | null> {
   const html = await fetchHtml(url);
+
   if (!html) return null;
 
   const $ = cheerio.load(html);
 
   const title =
     $("h1").first().text().trim() ||
-    $("meta[property='og:title']").attr("content")?.trim() ||
-    $("[itemprop='name']").first().text().trim() ||
-    titleFromProductUrl(url) ||
-    null;
+    titleFromProductUrl(url);
 
   const price =
-    parsePrice($("meta[property='product:price:amount']").attr("content")) ??
-    parsePrice($("meta[itemprop='price']").attr("content")) ??
-    parsePrice($("[itemprop='price']").first().attr("content")) ??
-    parsePrice($("[itemprop='price']").first().text().trim()) ??
-    parsePrice($(".current-price .price").first().text().trim()) ??
-    parsePrice($(".product-prices .price").first().text().trim()) ??
     parsePrice($(".price").first().text().trim()) ??
-    extractPriceFromJson(html) ??
-    null;
-
-  console.log("🎲 DM detail parsed:", {
-    url,
-    title,
-    price
-  });
+    extractPriceFromJson(html);
 
   return {
-    title: title ? cleanTitle(title) : null,
+    title,
     price
   };
 }
 
-function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | null {
+function pickBestCandidate(
+  item: Item,
+  candidates: Candidate[]
+): Candidate | null {
   const wanted = normalizeSearchText(item.name);
+
   const importantTokens = getImportantTokens(wanted);
 
   console.log(
     "🎲 DM raw candidates:",
-    candidates.slice(0, 12).map((candidate) => ({
+    candidates.map((candidate) => ({
       title: candidate.title,
       price: candidate.price,
       url: candidate.url
@@ -507,21 +314,9 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   const filtered = candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
-    const url = normalizeSearchText(candidate.url);
 
-    if (
-      item.category === "tcg" &&
-      isLikelyTcgMerch(candidate.title, candidate.url)
-    ) {
-      return false;
-    }
-
-    if (isInvalidMiniatureMatch(item, candidate.title, candidate.url)) {
-      return false;
-    }
-
-    return importantTokens.every(
-      (token) => title.includes(token) || url.includes(token)
+    return importantTokens.every((token) =>
+      title.includes(token)
     );
   });
 
@@ -531,16 +326,11 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   const scored = filtered.map((candidate) => {
     const title = normalizeSearchText(candidate.title);
-    const url = normalizeSearchText(candidate.url);
 
     let score = similarityScore(wanted, title);
 
-    if (title.includes(wanted)) score += 0.3;
-    if (url.includes(wanted.replace(/\s+/g, "-"))) score += 0.2;
-    if (candidate.price != null && candidate.price > 0) score += 0.05;
-
-    if (item.category === "tcg") {
-      score -= getTcgMerchPenalty(candidate.title, candidate.url);
+    if (title.includes(wanted)) {
+      score += 0.3;
     }
 
     return {
@@ -551,19 +341,11 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   scored.sort((a, b) => b.score - a.score);
 
-  console.log(
-    "🎲 DM top:",
-    scored.slice(0, 8).map((s) => ({
-      title: s.candidate.title,
-      price: s.candidate.price,
-      score: Number(s.score.toFixed(2)),
-      url: s.candidate.url
-    }))
-  );
-
   const best = scored[0];
 
-  if (!best || best.score < 0.45) return null;
+  if (!best || best.score < 0.45) {
+    return null;
+  }
 
   return best.candidate;
 }
@@ -572,16 +354,9 @@ function chooseFinalPrice(
   listingPrice: number | null,
   detailPrice: number | null
 ): number | null {
-  if (listingPrice == null || listingPrice <= 0) {
-    return detailPrice && detailPrice > 0 ? detailPrice : null;
+  if (detailPrice && detailPrice > 0) {
+    return detailPrice;
   }
-
-  if (!detailPrice || detailPrice <= 0) return listingPrice;
-
-  const difference = Math.abs(detailPrice - listingPrice);
-  const maxAllowedDifference = listingPrice * 0.25;
-
-  if (difference <= maxAllowedDifference) return detailPrice;
 
   return listingPrice;
 }
@@ -592,13 +367,9 @@ function parsePrice(text: string | null | undefined): number | null {
   if (!value) return null;
 
   const numeric = Number(value.replace(",", "."));
-  if (Number.isFinite(numeric) && numeric > 0) return numeric;
 
-  const matches = [...value.matchAll(/(\d{1,5}(?:[.,]\d{2})?)\s*€/g)];
-
-  if (matches.length > 0) {
-    const last = matches[matches.length - 1]?.[1];
-    return parseEuroPrice(last ?? null);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
   }
 
   return parseEuroPrice(value);
@@ -606,15 +377,12 @@ function parsePrice(text: string | null | undefined): number | null {
 
 function extractPriceFromJson(html: string): number | null {
   const matches = [
-    ...html.matchAll(/"price"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g),
-    ...html.matchAll(/"salePrice"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g),
-    ...html.matchAll(/"finalPrice"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g)
+    ...html.matchAll(/"price"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g)
   ];
 
   const prices = matches
     .map((match) => Number(String(match[1]).replace(",", ".")))
-    .filter((price) => Number.isFinite(price) && price > 0 && price < 500)
-    .sort((a, b) => b - a);
+    .filter((price) => Number.isFinite(price) && price > 0);
 
   return prices[0] ?? null;
 }
@@ -622,14 +390,15 @@ function extractPriceFromJson(html: string): number | null {
 function titleFromProductUrl(url: string): string {
   try {
     const parsed = new URL(url);
-    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
-    const withoutExt = last.replace(/\.html$/i, "");
 
-    return withoutExt
+    const last =
+      parsed.pathname.split("/").filter(Boolean).pop() || "";
+
+    return last
+      .replace(/\.html$/i, "")
       .replace(/^\d+-/, "")
       .replace(/-\d+$/, "")
       .replace(/-/g, " ")
-      .replace(/\s+/g, " ")
       .trim();
   } catch {
     return "";
@@ -638,29 +407,13 @@ function titleFromProductUrl(url: string): string {
 
 function getImportantTokens(normalizedText: string): string[] {
   const stopWords = new Set([
-    "el",
-    "la",
-    "los",
-    "las",
-    "un",
-    "una",
-    "unos",
-    "unas",
-    "de",
-    "del",
-    "en",
-    "a",
-    "al",
-    "y",
-    "o",
-    "por",
-    "para",
-    "con",
-    "sin",
     "the",
-    "tcg",
-    "card",
-    "carta"
+    "and",
+    "combat",
+    "patrol",
+    "warhammer",
+    "40000",
+    "40k"
   ]);
 
   return normalizedText
@@ -672,56 +425,8 @@ function getImportantTokens(normalizedText: string): string[] {
 
 function normalizeSearchText(value: string): string {
   return normalizeText(value)
-    .replace(/\bedicion\b/g, "")
-    .replace(/\bedición\b/g, "")
-    .replace(/\bcastellano\b/g, "")
-    .replace(/\bespañol\b/g, "")
-    .replace(/\bespanol\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function cleanQueryForSearch(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isLikelyTcgMerch(title: string, url: string): boolean {
-  const normalized = normalizeSearchText(`${title} ${url}`);
-
-  return TCG_MERCH_TOKENS.some((token) =>
-    normalized.includes(normalizeSearchText(token))
-  );
-}
-
-function getTcgMerchPenalty(title: string, url: string): number {
-  return isLikelyTcgMerch(title, url) ? 0.8 : 0;
-}
-
-function isInvalidMiniatureMatch(item: Item, title: string, url: string): boolean {
-  if (item.category !== "miniature") return false;
-
-  const wanted = normalizeSearchText(item.name);
-  const candidate = normalizeSearchText(`${title} ${url}`);
-
-  for (const rule of MINIATURE_REQUIRED_EQUIVALENCES) {
-    const wantedHasRule = rule.wanted.some((token) =>
-      wanted.includes(normalizeSearchText(token))
-    );
-
-    if (!wantedHasRule) continue;
-
-    const candidateHasAccepted = rule.accepted.some((token) =>
-      candidate.includes(normalizeSearchText(token))
-    );
-
-    if (!candidateHasAccepted) return true;
-  }
-
-  return MINIATURE_BLOCKED_TITLE_TOKENS.some((token) =>
-    candidate.includes(normalizeSearchText(token))
-  );
 }
 
 function cleanQuery(value: string): string {
@@ -730,22 +435,18 @@ function cleanQuery(value: string): string {
     .trim();
 }
 
-function cleanTitle(value: string): string {
+function cleanQueryForSearch(value: string): string {
   return String(value || "")
+    .replace(/warhammer\s*40k/gi, "")
+    .replace(/warhammer\s*40000/gi, "")
+    .replace(/wh40k/gi, "")
     .replace(/\s+/g, " ")
-    .replace(/Comprar/gi, "")
-    .replace(/Añadir al carrito/gi, "")
-    .replace(/Vista rápida/gi, "")
-    .replace(/Oferta/gi, "")
-    .replace(/Agotado/gi, "")
     .trim();
 }
 
-function normalizeLinkText(value: string): string {
+function cleanTitle(value: string): string {
   return String(value || "")
     .replace(/\s+/g, " ")
-    .replace(/Comprar/gi, "")
-    .replace(/Añadir al carrito/gi, "")
     .trim();
 }
 
@@ -753,70 +454,43 @@ function looksLikeProductUrl(url: string): boolean {
   const normalized = url.toLowerCase();
 
   if (!normalized.startsWith("http")) return false;
+
   if (!normalized.includes("dungeonmarvels.com")) return false;
 
-  if (normalized.includes("/busqueda")) return false;
-  if (normalized.includes("/buscar")) return false;
-  if (normalized.includes("/search")) return false;
-  if (normalized.includes("/carrito")) return false;
-  if (normalized.includes("/login")) return false;
-  if (normalized.includes("#")) return false;
+  if (!normalized.endsWith(".html")) return false;
 
-  return normalized.endsWith(".html");
-}
-
-function logHtmlDiagnostics(html: string) {
-  const normalizedHtml = decodeHtml(html)
-    .replace(/\\u002F/g, "/")
-    .replace(/\\\//g, "/")
-    .replace(/%2F/gi, "/");
-
-  const productUrlMatches = [
-    ...(normalizedHtml.match(
-      /https?:\/\/dungeonmarvels\.com\/[^"'<>\\\s]+\.html/gi
-    ) ?? []),
-    ...(normalizedHtml.match(/\/[^"'<>\\\s]+\.html/gi) ?? [])
-  ];
-
-  console.log("🎲 DM diagnostics:", {
-    containsPriceText: normalizedHtml.includes("€"),
-    containsProductMiniature: normalizedHtml.includes("product-miniature"),
-    containsProductTitle: normalizedHtml.includes("product-title"),
-    sampleProductUrls: productUrlMatches.slice(0, 10)
-  });
-}
-
-function decodeHtml(value: string): string {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#039;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+  return true;
 }
 
 function absolutize(href: string): string {
   if (!href) return "";
-  if (href.startsWith("http://") || href.startsWith("https://")) return href;
-  if (href.startsWith("/")) return `${BASE_URL}${href}`;
+
+  if (href.startsWith("http")) return href;
+
+  if (href.startsWith("/")) {
+    return `${BASE_URL}${href}`;
+  }
+
   return `${BASE_URL}/${href}`;
 }
 
-function computeConfidence(item: Item, matchedTitle: string): number {
+function computeConfidence(
+  item: Item,
+  matchedTitle: string
+): number {
   const wanted = normalizeSearchText(item.name);
+
   const matched = normalizeSearchText(matchedTitle);
 
-  let confidence = 0.45 + similarityScore(wanted, matched) * 0.45;
+  let confidence =
+    0.45 + similarityScore(wanted, matched) * 0.45;
 
-  if (matched.includes(wanted)) confidence += 0.05;
-
-  if (item.category === "tcg" && isLikelyTcgMerch(matchedTitle, "")) {
-    confidence -= 0.25;
+  if (matched.includes(wanted)) {
+    confidence += 0.05;
   }
 
-  if (isInvalidMiniatureMatch(item, matchedTitle, "")) {
-    confidence -= 0.35;
-  }
-
-  return Math.max(0.2, Math.min(0.92, Number(confidence.toFixed(2))));
+  return Math.max(
+    0.2,
+    Math.min(0.92, Number(confidence.toFixed(2)))
+  );
 }
