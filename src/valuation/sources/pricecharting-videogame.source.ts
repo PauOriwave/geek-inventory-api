@@ -37,12 +37,10 @@ type DetailResult = {
 const BASE_URL = "https://www.pricecharting.com";
 const REQUEST_TIMEOUT_MS = 8000;
 
-const SUPPORTED_CATEGORY = "videogame";
-
 export async function getPriceChartingVideogamePrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
-  if (item.category !== SUPPORTED_CATEGORY) return null;
+  if (item.category !== "videogame") return null;
 
   const query = cleanQuery(item.name);
   if (!query) return null;
@@ -108,7 +106,13 @@ export async function getPriceChartingVideogamePrice(
     return null;
   }
 
-  const confidence = computeConfidence(item, query, title, consoleName, best.score);
+  const confidence = computeConfidence(
+    item,
+    query,
+    title,
+    consoleName,
+    best.score
+  );
 
   return {
     price: Number(finalPrice.toFixed(2)),
@@ -183,23 +187,27 @@ async function searchPriceCharting(
 
 function buildSearchQueries(item: Item, query: string): string[] {
   const clean = cleanQueryForSearch(query);
-  const platform = normalizePlatform(item.platform);
+  const inferredPlatform = inferPlatformFromName(clean);
+  const platform = normalizePlatform(item.platform) ?? inferredPlatform;
   const region = normalizeRegion(item.region);
+
+  const queryWithoutPlatform = removePlatformTokens(clean);
+  const baseQuery = queryWithoutPlatform || clean;
 
   const queries = new Set<string>();
 
   queries.add(clean);
 
   if (platform && region === "pal") {
-    queries.add(`${clean} PAL ${platform}`);
-    queries.add(`${clean} PAL`);
+    queries.add(`${baseQuery} PAL ${platform}`);
+    queries.add(`${baseQuery} PAL`);
   }
 
   if (platform) {
-    queries.add(`${clean} ${platform}`);
+    queries.add(`${baseQuery} ${platform}`);
   }
 
-  queries.add(clean.replace(/[:™®©]/g, " ").replace(/\s+/g, " ").trim());
+  queries.add(baseQuery);
 
   return [...queries]
     .map((value) => value.replace(/\s+/g, " ").trim())
@@ -219,11 +227,9 @@ function extractSearchCandidates(
   $("tr").each((_, row) => {
     const root = $(row);
 
-    const href =
-      root.find("a[href*='/game/']").first().attr("href") ||
-      "";
-
+    const href = root.find("a[href*='/game/']").first().attr("href") || "";
     const url = absolutize(href);
+
     if (!isGameProductUrl(url)) return;
 
     const title =
@@ -318,14 +324,19 @@ async function fetchDetail(url: string): Promise<DetailResult | null> {
   const bodyText = normalizeWhitespace($("body").text());
 
   const prices = extractDetailPrices($, bodyText);
-  const details = extractDetails($);
+  const details = extractDetails($, url);
   const recentSales = extractRecentSales($);
   const rawExtractedLabels = extractRawLabels(bodyText);
 
   const consoleName =
-    cleanTitle(String(details.consoleName ?? "")) ||
+    cleanSafeConsoleName(String(details.consoleName ?? "")) ||
+    extractConsoleNameFromTitle(title ?? "") ||
     extractConsoleNameFromUrl(url) ||
-    extractConsoleNameFromRow(bodyText, url);
+    null;
+
+  if (consoleName) {
+    details.consoleName = consoleName;
+  }
 
   console.log("🎮 PriceCharting Videogame detail parsed:", {
     url,
@@ -427,7 +438,10 @@ function extractPricesFromText(text: string): {
   };
 }
 
-function extractDetails($: cheerio.CheerioAPI): Record<string, string | number | null> {
+function extractDetails(
+  $: cheerio.CheerioAPI,
+  url: string
+): Record<string, string | number | null> {
   const details: Record<string, string | number | null> = {};
   const bodyText = normalizeWhitespace($("body").text());
 
@@ -446,7 +460,7 @@ function extractDetails($: cheerio.CheerioAPI): Record<string, string | number |
   for (const label of knownLabels) {
     const value = extractValueAfterLabel(bodyText, label);
 
-    if (value) {
+    if (value && isSafeDetailValue(value)) {
       details[toCamelCase(label)] = value;
     }
   }
@@ -454,15 +468,11 @@ function extractDetails($: cheerio.CheerioAPI): Record<string, string | number |
   const h1 = cleanTitle($("h1").first().text());
   if (h1) details.title = h1;
 
-  const titleParts = h1.match(/\(([^)]+)\)/);
-  if (titleParts?.[1]) {
-    details.consoleName = titleParts[1].trim();
-  }
+  const consoleFromTitle = extractConsoleNameFromTitle(h1);
+  const consoleFromUrl = extractConsoleNameFromUrl(url);
+  const consoleFromPage = cleanSafeConsoleName(String(details.console ?? ""));
 
-  if (!details.consoleName) {
-    const consoleFromPage = extractValueAfterLabel(bodyText, "Console");
-    if (consoleFromPage) details.consoleName = consoleFromPage;
-  }
+  details.consoleName = consoleFromTitle || consoleFromUrl || consoleFromPage;
 
   return details;
 }
@@ -474,10 +484,12 @@ function extractValueAfterLabel(text: string, label: string): string | null {
 
   if (!match?.[1]) return null;
 
-  return match[1]
+  const value = match[1]
     .replace(/\s{2,}.*/, "")
     .replace(/Full Price Guide.*$/i, "")
     .trim();
+
+  return isSafeDetailValue(value) ? value : null;
 }
 
 function extractRecentSales($: cheerio.CheerioAPI): Array<{
@@ -499,16 +511,23 @@ function extractRecentSales($: cheerio.CheerioAPI): Array<{
 
     if (!text.includes("$")) return;
     if (!/\d{4}-\d{2}-\d{2}/.test(text)) return;
+    if (isNonSaleRow(text)) return;
 
     const date = text.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? null;
     const price = extractFirstUsdPrice(text);
     const source = text.toLowerCase().includes("ebay") ? "ebay" : null;
 
+    const anchorTexts = root
+      .find("a")
+      .map((_, link) => cleanSaleTitle($(link).text()))
+      .get()
+      .filter(Boolean);
+
     const title =
-      cleanSaleTitle(root.find("a").first().text()) ||
+      anchorTexts.find((value) => !isBadSaleTitle(value)) ||
       cleanSaleTitle(text.replace(/\$\s*\d{1,6}(?:\.\d{1,2})?.*/, ""));
 
-    if (!price || !title) return;
+    if (!price || !title || isBadSaleTitle(title)) return;
 
     sales.push({
       date,
@@ -519,6 +538,34 @@ function extractRecentSales($: cheerio.CheerioAPI): Array<{
   });
 
   return sales.slice(0, 20);
+}
+
+function isNonSaleRow(text: string): boolean {
+  const normalized = normalizeSearchText(text);
+
+  return (
+    normalized.includes("time warp") ||
+    normalized.includes("subscribe") ||
+    normalized.includes("photos of completed sales") ||
+    normalized.includes("remove ads") ||
+    normalized.includes("pricecharting pro")
+  );
+}
+
+function isBadSaleTitle(value: string): boolean {
+  const normalized = normalizeSearchText(value);
+
+  if (!normalized) return true;
+  if (normalized.length < 4) return true;
+
+  return (
+    normalized === "buy" ||
+    normalized === "view" ||
+    normalized === "subscribe" ||
+    normalized.includes("time warp") ||
+    normalized.includes("completed sales") ||
+    normalized.includes("pricecharting")
+  );
 }
 
 function extractFirstUsdPrice(text: string): number | null {
@@ -552,7 +599,11 @@ function extractRawLabels(text: string): Record<string, string> {
     const match = text.match(pattern);
 
     if (match?.[1]) {
-      result[label] = match[1].trim();
+      const value = match[1].trim();
+
+      if (isSafeDetailValue(value)) {
+        result[label] = value;
+      }
     }
   }
 
@@ -628,11 +679,12 @@ function scoreCandidate(
   url: string,
   consoleName: string | null
 ): number {
-  const wanted = normalizeSearchText(query);
+  const wanted = normalizeSearchText(removePlatformTokens(query));
   const normalizedTitle = normalizeSearchText(title);
   const normalizedUrl = normalizeSearchText(url);
   const normalizedConsole = normalizeSearchText(consoleName ?? "");
-  const itemPlatform = normalizePlatform(item.platform);
+  const itemPlatform =
+    normalizePlatform(item.platform) ?? inferPlatformFromName(item.name);
   const region = normalizeRegion(item.region);
 
   let score = similarityScore(wanted, normalizedTitle);
@@ -653,13 +705,7 @@ function scoreCandidate(
   }
 
   if (itemPlatform) {
-    const normalizedItemPlatform = normalizeSearchText(itemPlatform);
-
-    if (
-      normalizedConsole.includes(normalizedItemPlatform) ||
-      normalizedUrl.includes(normalizedItemPlatform.replace(/\s+/g, "-")) ||
-      matchesKnownPlatformAlias(itemPlatform, normalizedConsole, normalizedUrl)
-    ) {
+    if (matchesKnownPlatformAlias(itemPlatform, normalizedConsole, normalizedUrl)) {
       score += 0.45;
     } else {
       score -= 0.35;
@@ -686,7 +732,7 @@ function computeConfidence(
   consoleName: string | null,
   score: number
 ): number {
-  const wanted = normalizeSearchText(query);
+  const wanted = normalizeSearchText(removePlatformTokens(query));
   const matched = normalizeSearchText(title);
   const wantedTokens = getImportantTokens(wanted);
   const matchedTokens = wantedTokens.filter((token) => matched.includes(token));
@@ -702,7 +748,8 @@ function computeConfidence(
     confidence += (matchedTokens.length / wantedTokens.length) * 0.16;
   }
 
-  const platform = normalizePlatform(item.platform);
+  const platform =
+    normalizePlatform(item.platform) ?? inferPlatformFromName(item.name);
   const consoleText = normalizeSearchText(consoleName ?? "");
 
   if (platform && matchesKnownPlatformAlias(platform, consoleText, "")) {
@@ -794,10 +841,7 @@ function normalizePlatform(value: string | null): string | null {
     return "playstation";
   }
 
-  if (
-    normalized === "switch" ||
-    normalized === "nintendoswitch"
-  ) {
+  if (normalized === "switch" || normalized === "nintendoswitch") {
     return "nintendo switch";
   }
 
@@ -810,31 +854,19 @@ function normalizePlatform(value: string | null): string | null {
     return "xbox series x";
   }
 
-  if (
-    normalized === "xboxone" ||
-    normalized === "xone"
-  ) {
+  if (normalized === "xboxone" || normalized === "xone") {
     return "xbox one";
   }
 
-  if (
-    normalized === "gba" ||
-    normalized === "gameboyadvance"
-  ) {
+  if (normalized === "gba" || normalized === "gameboyadvance") {
     return "gameboy advance";
   }
 
-  if (
-    normalized === "gb" ||
-    normalized === "gameboy"
-  ) {
+  if (normalized === "gb" || normalized === "gameboy") {
     return "gameboy";
   }
 
-  if (
-    normalized === "gbc" ||
-    normalized === "gameboycolor"
-  ) {
+  if (normalized === "gbc" || normalized === "gameboycolor") {
     return "gameboy color";
   }
 
@@ -847,17 +879,11 @@ function normalizePlatform(value: string | null): string | null {
     return "gamecube";
   }
 
-  if (
-    normalized === "3ds" ||
-    normalized === "nintendo3ds"
-  ) {
+  if (normalized === "3ds" || normalized === "nintendo3ds") {
     return "nintendo 3ds";
   }
 
-  if (
-    normalized === "ds" ||
-    normalized === "nintendods"
-  ) {
+  if (normalized === "ds" || normalized === "nintendods") {
     return "nintendo ds";
   }
 
@@ -865,6 +891,70 @@ function normalizePlatform(value: string | null): string | null {
   if (normalized === "wii") return "wii";
 
   return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function inferPlatformFromName(value: string): string | null {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  const checks: Array<[RegExp, string]> = [
+    [/\bps5\b|\bplaystation 5\b/, "playstation 5"],
+    [/\bps4\b|\bplaystation 4\b/, "playstation 4"],
+    [/\bps3\b|\bplaystation 3\b/, "playstation 3"],
+    [/\bps2\b|\bplaystation 2\b/, "playstation 2"],
+    [/\bps1\b|\bpsx\b|\bplaystation 1\b/, "playstation"],
+    [/\bgamecube\b|\bgcn\b|\bgc\b/, "gamecube"],
+    [/\bnintendo switch\b|\bswitch\b/, "nintendo switch"],
+    [/\bxbox series\b|\bseries x\b|\bseries s\b/, "xbox series x"],
+    [/\bxbox one\b/, "xbox one"],
+    [/\bgba\b|\bgameboy advance\b/, "gameboy advance"],
+    [/\bgbc\b|\bgameboy color\b/, "gameboy color"],
+    [/\bgameboy\b|\bgb\b/, "gameboy"],
+    [/\b3ds\b|\bnintendo 3ds\b/, "nintendo 3ds"],
+    [/\bds\b|\bnintendo ds\b/, "nintendo ds"],
+    [/\bwii u\b|\bwiiu\b/, "wii u"],
+    [/\bwii\b/, "wii"]
+  ];
+
+  for (const [pattern, platform] of checks) {
+    if (pattern.test(normalized)) return platform;
+  }
+
+  return null;
+}
+
+function removePlatformTokens(value: string): string {
+  return String(value || "")
+    .replace(/\bps5\b/gi, "")
+    .replace(/\bps4\b/gi, "")
+    .replace(/\bps3\b/gi, "")
+    .replace(/\bps2\b/gi, "")
+    .replace(/\bps1\b/gi, "")
+    .replace(/\bpsx\b/gi, "")
+    .replace(/\bplaystation\s*[1-5]?\b/gi, "")
+    .replace(/\bgamecube\b/gi, "")
+    .replace(/\bgcn\b/gi, "")
+    .replace(/\bgc\b/gi, "")
+    .replace(/\bnintendo\s*switch\b/gi, "")
+    .replace(/\bswitch\b/gi, "")
+    .replace(/\bxbox\s*series\s*x\/?s?\b/gi, "")
+    .replace(/\bxbox\s*one\b/gi, "")
+    .replace(/\bgameboy\s*advance\b/gi, "")
+    .replace(/\bgba\b/gi, "")
+    .replace(/\bgameboy\s*color\b/gi, "")
+    .replace(/\bgbc\b/gi, "")
+    .replace(/\bgameboy\b/gi, "")
+    .replace(/\b3ds\b/gi, "")
+    .replace(/\bnintendo\s*3ds\b/gi, "")
+    .replace(/\bnintendo\s*ds\b/gi, "")
+    .replace(/\bds\b/gi, "")
+    .replace(/\bwii\s*u\b/gi, "")
+    .replace(/\bwiiu\b/gi, "")
+    .replace(/\bwii\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeRegion(value: string | null): string | null {
@@ -934,15 +1024,42 @@ function matchesKnownPlatformAlias(
 function getPlatformAliases(platform: string): string[] {
   const normalized = normalizePlatform(platform) ?? platform;
 
-  if (normalized === "playstation 5") return ["ps5", "playstation 5", "pal playstation 5"];
-  if (normalized === "playstation 4") return ["ps4", "playstation 4", "pal playstation 4"];
-  if (normalized === "playstation 3") return ["ps3", "playstation 3", "pal playstation 3"];
-  if (normalized === "playstation 2") return ["ps2", "playstation 2", "pal playstation 2"];
-  if (normalized === "playstation") return ["ps1", "psx", "playstation", "pal playstation"];
-  if (normalized === "nintendo switch") return ["switch", "nintendo switch"];
-  if (normalized === "xbox series x") return ["xbox series x", "xbox series x/s", "xbox series"];
-  if (normalized === "xbox one") return ["xbox one"];
-  if (normalized === "gameboy advance") return ["gba", "gameboy advance"];
+  if (normalized === "playstation 5") {
+    return ["ps5", "playstation 5", "pal playstation 5"];
+  }
+
+  if (normalized === "playstation 4") {
+    return ["ps4", "playstation 4", "pal playstation 4"];
+  }
+
+  if (normalized === "playstation 3") {
+    return ["ps3", "playstation 3", "pal playstation 3"];
+  }
+
+  if (normalized === "playstation 2") {
+    return ["ps2", "playstation 2", "pal playstation 2"];
+  }
+
+  if (normalized === "playstation") {
+    return ["ps1", "psx", "playstation", "pal playstation"];
+  }
+
+  if (normalized === "nintendo switch") {
+    return ["switch", "nintendo switch"];
+  }
+
+  if (normalized === "xbox series x") {
+    return ["xbox series x", "xbox series x/s", "xbox series"];
+  }
+
+  if (normalized === "xbox one") {
+    return ["xbox one"];
+  }
+
+  if (normalized === "gameboy advance") {
+    return ["gba", "gameboy advance"];
+  }
+
   if (normalized === "gameboy") return ["gameboy"];
   if (normalized === "gameboy color") return ["gbc", "gameboy color"];
   if (normalized === "gamecube") return ["gamecube", "nintendo gamecube"];
@@ -970,6 +1087,9 @@ function extractConsoleNameFromRow(text: string, url: string): string | null {
     "Nintendo Switch",
     "Xbox Series X",
     "Xbox One",
+    "PAL Gamecube",
+    "JP Gamecube",
+    "Gamecube",
     "GameBoy Advance",
     "GameBoy Color",
     "GameBoy",
@@ -991,6 +1111,45 @@ function extractConsoleNameFromRow(text: string, url: string): string | null {
   return null;
 }
 
+function extractConsoleNameFromTitle(title: string): string | null {
+  const cleaned = cleanTitle(title);
+  const known = [
+    "PAL Playstation 5",
+    "Playstation 5",
+    "PAL Playstation 4",
+    "Playstation 4",
+    "PAL Playstation 3",
+    "Playstation 3",
+    "PAL Playstation 2",
+    "Playstation 2",
+    "PAL Playstation",
+    "Playstation",
+    "Nintendo Switch",
+    "Xbox Series X",
+    "Xbox One",
+    "PAL Gamecube",
+    "JP Gamecube",
+    "Gamecube",
+    "GameBoy Advance",
+    "GameBoy Color",
+    "GameBoy",
+    "Nintendo 3DS",
+    "Nintendo DS",
+    "Wii U",
+    "Wii"
+  ];
+
+  const normalized = normalizeSearchText(cleaned);
+
+  for (const candidate of known) {
+    if (normalized.endsWith(normalizeSearchText(candidate))) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 function extractConsoleNameFromUrl(url: string): string | null {
   try {
     const parsed = new URL(url);
@@ -1004,11 +1163,52 @@ function extractConsoleNameFromUrl(url: string): string | null {
       .replace(/-/g, " ")
       .replace(/\b\w/g, (char) => char.toUpperCase())
       .replace(/\bPal\b/g, "PAL")
+      .replace(/\bJp\b/g, "JP")
       .replace(/\bPs\b/g, "PS")
+      .replace(/\bGamecube\b/g, "Gamecube")
       .trim();
   } catch {
     return null;
   }
+}
+
+function cleanSafeConsoleName(value: string): string | null {
+  const cleaned = cleanTitle(value);
+
+  if (!cleaned) return null;
+  if (!isSafeDetailValue(cleaned)) return null;
+  if (cleaned.length > 60) return null;
+
+  const normalized = normalizeSearchText(cleaned);
+
+  if (
+    normalized.includes("body") ||
+    normalized.includes("overflow") ||
+    normalized.includes("vgpc") ||
+    normalized.includes("function") ||
+    normalized.includes("script")
+  ) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+function isSafeDetailValue(value: string): boolean {
+  const normalized = normalizeSearchText(value);
+
+  if (!value || value.length > 140) return false;
+
+  return !(
+    normalized.includes("function") ||
+    normalized.includes("script") ||
+    normalized.includes("body") ||
+    normalized.includes("overflow") ||
+    normalized.includes("vgpc") ||
+    normalized.includes("_uid") ||
+    normalized.includes("price compari") ||
+    normalized.includes("pricecharting pro")
+  );
 }
 
 function isGameProductUrl(url: string): boolean {
@@ -1043,12 +1243,7 @@ function titleFromUrl(url: string): string {
     const parsed = new URL(url);
     const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
 
-    return cleanTitle(
-      last
-        .replace(/-/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-    );
+    return cleanTitle(last.replace(/-/g, " ").replace(/\s+/g, " ").trim());
   } catch {
     return "";
   }
@@ -1063,9 +1258,7 @@ function normalizeSearchText(value: string): string {
 }
 
 function cleanQuery(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function cleanQueryForSearch(value: string): string {
@@ -1098,9 +1291,7 @@ function cleanSaleTitle(value: string): string {
 }
 
 function normalizeWhitespace(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function toCamelCase(value: string): string {
