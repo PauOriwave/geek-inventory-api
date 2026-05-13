@@ -1,6 +1,7 @@
 import { Item, Prisma } from "@prisma/client";
 import prisma from "../prisma/client";
 
+import { getPriceChartingVideogamePrice } from "./sources/pricecharting-videogame.source";
 import { getWorldViceousPrice } from "./sources/world-viceous.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
@@ -43,6 +44,12 @@ const HIGH_CONFIDENCE_THRESHOLD = 0.88;
 const TCG_DUNGEON_MARVELS_MIN_CONFIDENCE = 0.8;
 
 const sources: SourceDefinition[] = [
+  {
+    name: "pricecharting_videogame",
+    priority: 91,
+    categories: ["videogame"],
+    handler: getPriceChartingVideogamePrice
+  },
   {
     name: "world_viceous",
     priority: 90,
