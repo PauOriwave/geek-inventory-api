@@ -1,5 +1,6 @@
 import { Item } from "@prisma/client";
 import * as cheerio from "cheerio";
+
 import { normalizeText, parseEuroPrice, similarityScore } from "../utils";
 import { ScraperSourceResult } from "../scraper.types";
 
@@ -12,7 +13,6 @@ type Candidate = {
 const BASE_URL = "https://www.normacomics.com";
 const REQUEST_TIMEOUT_MS = 15000;
 
-// 🔴 CAMBIO CLAVE → SOLO comics
 const SUPPORTED_CATEGORIES = new Set(["comic"]);
 
 export async function getNormaComicsPrice(
@@ -54,6 +54,17 @@ export async function getNormaComicsPrice(
     const detailPrice = detail?.price ?? null;
     const detailTitle = detail?.title ?? null;
 
+    const matchedTitle = detailTitle || best.title;
+
+    if (!isSameComicVolume(item.name, matchedTitle)) {
+      console.log("📚 Norma rejected by volume mismatch:", {
+        wanted: item.name,
+        matchedTitle,
+        url: best.url
+      });
+      continue;
+    }
+
     const finalPrice = chooseFinalPrice(best.price, detailPrice);
 
     if (!finalPrice || finalPrice <= 0) {
@@ -66,44 +77,62 @@ export async function getNormaComicsPrice(
       continue;
     }
 
-    const matchedTitle = detailTitle || best.title;
+    const confidence = computeConfidence(item, matchedTitle);
 
     console.log("📚 Norma selected:", {
       title: matchedTitle,
       listingPrice: best.price,
       detailPrice,
       finalPrice,
+      confidence,
       url: best.url
     });
 
     return {
       price: Number(finalPrice.toFixed(2)),
+      currency: "EUR",
       source: "norma_comics",
-      confidence: computeConfidence(item, matchedTitle),
+      confidence,
       matchedTitle,
       matchedUrl: best.url,
-      query
+      query,
+      metadata: {
+        provider: "norma_comics",
+        currency: "EUR",
+        listingPrice: best.price,
+        detailPrice,
+        finalPrice,
+        category: item.category,
+        url: best.url,
+        volumeCheck: {
+          wantedVolume: extractVolumeNumber(item.name),
+          matchedVolume: extractVolumeNumber(matchedTitle),
+          passed: isSameComicVolume(item.name, matchedTitle)
+        }
+      }
     };
   }
 
   return null;
 }
 
-// =======================
-// RESTO SIN CAMBIOS
-// =======================
-
 function buildSearchQueries(name: string): string[] {
   const clean = cleanQuery(name);
+  const normalized = normalizeSearchText(clean);
+  const baseWithoutVolume = removeTrailingVolume(clean);
   const parts = clean.split(" ").filter(Boolean);
 
-  return [
+  const queries = [
     clean,
+    normalized,
+    baseWithoutVolume,
     parts.slice(0, 6).join(" "),
     parts.slice(0, 5).join(" "),
     parts.slice(0, 4).join(" "),
     parts.slice(0, 3).join(" ")
-  ]
+  ];
+
+  return queries
     .map((query) => query.trim())
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index);
@@ -167,13 +196,20 @@ function extractCandidates(html: string): Candidate[] {
     if (!title || !href) return;
 
     const url = absolutize(href);
-    const key = `${normalizeText(title)}|${price ?? "null"}|${url}`;
+
+    if (!isProductUrl(url)) return;
+
+    const cleanCandidateTitle = cleanTitle(title);
+
+    if (!cleanCandidateTitle) return;
+
+    const key = `${normalizeText(cleanCandidateTitle)}|${price ?? "null"}|${url}`;
 
     if (seen.has(key)) return;
     seen.add(key);
 
     candidates.push({
-      title: cleanTitle(title),
+      title: cleanCandidateTitle,
       price,
       url
     });
@@ -191,13 +227,13 @@ async function fetchDetail(
   const $ = cheerio.load(html);
 
   const title =
-    $("h1").first().text().trim() ||
-    $("meta[property='og:title']").attr("content") ||
+    cleanTitle($("h1").first().text()) ||
+    cleanTitle($("meta[property='og:title']").attr("content") || "") ||
     null;
 
   const price =
-    parsePrice($(".price").first().text()) ||
-    parsePrice($("meta[property='product:price:amount']").attr("content")) ||
+    parsePrice($(".price").first().text()) ??
+    parsePrice($("meta[property='product:price:amount']").attr("content")) ??
     null;
 
   return {
@@ -208,23 +244,74 @@ async function fetchDetail(
 
 function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | null {
   const wanted = normalizeSearchText(item.name);
-  const wantedTokens = wanted.split(" ").filter(Boolean);
+  const wantedBase = normalizeSearchText(removeTrailingVolume(item.name));
+  const wantedTokens = getImportantTokens(wantedBase);
+  const wantedVolume = extractVolumeNumber(item.name);
 
-  const scored = candidates.map((candidate) => {
+  const filtered = candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
 
-    let score = similarityScore(wanted, title);
+    if (wantedVolume && !isSameComicVolume(item.name, candidate.title)) {
+      return false;
+    }
 
-    if (title.includes(wanted)) score += 0.25;
+    if (wantedTokens.length > 0) {
+      return wantedTokens.every((token) => title.includes(token));
+    }
+
+    return true;
+  });
+
+  console.log(
+    "📚 Norma filtered candidates:",
+    filtered.slice(0, 12).map((candidate) => ({
+      title: candidate.title,
+      price: candidate.price,
+      volume: extractVolumeNumber(candidate.title),
+      url: candidate.url
+    }))
+  );
+
+  if (filtered.length === 0) return null;
+
+  const scored = filtered.map((candidate) => {
+    const title = normalizeSearchText(candidate.title);
+    const candidateBase = normalizeSearchText(removeTrailingVolume(candidate.title));
+
+    let score = similarityScore(wantedBase || wanted, candidateBase || title);
+
+    if (title === wanted) score += 0.7;
+    if (title.includes(wanted)) score += 0.45;
+    if (candidateBase === wantedBase) score += 0.5;
+    if (candidateBase.includes(wantedBase)) score += 0.25;
 
     if (wantedTokens.every((token) => title.includes(token))) {
-      score += 0.2;
+      score += 0.25;
+    }
+
+    if (wantedVolume && extractVolumeNumber(candidate.title) === wantedVolume) {
+      score += 0.5;
+    }
+
+    if (candidate.price && candidate.price > 0) {
+      score += 0.05;
     }
 
     return { candidate, score };
   });
 
   scored.sort((a, b) => b.score - a.score);
+
+  console.log(
+    "📚 Norma top candidates:",
+    scored.slice(0, 8).map((entry) => ({
+      title: entry.candidate.title,
+      price: entry.candidate.price,
+      volume: extractVolumeNumber(entry.candidate.title),
+      score: Number(entry.score.toFixed(2)),
+      url: entry.candidate.url
+    }))
+  );
 
   const best = scored[0];
 
@@ -246,22 +333,128 @@ function parsePrice(text: string | null | undefined): number | null {
   const matches = [...value.matchAll(/(\d{1,5}(?:[.,]\d{2})?)\s*€/g)];
 
   if (matches.length > 0) {
-    return parseEuroPrice(matches[matches.length - 1][1]);
+    return parseEuroPrice(matches[matches.length - 1]?.[1] ?? null);
   }
 
   return parseEuroPrice(value);
 }
 
+function isSameComicVolume(wantedTitle: string, candidateTitle: string): boolean {
+  const wantedVolume = extractVolumeNumber(wantedTitle);
+  const candidateVolume = extractVolumeNumber(candidateTitle);
+
+  if (!wantedVolume) return true;
+  if (!candidateVolume) return false;
+
+  return wantedVolume === candidateVolume;
+}
+
+function extractVolumeNumber(value: string): string | null {
+  const normalized = normalizeSearchText(value)
+    .replace(/[ºª]/g, "")
+    .replace(/[#]/g, " ");
+
+  const explicit = normalized.match(
+    /\b(?:tomo|volumen|volume|vol|num|n|numero|número)\s*\.?\s*(\d{1,4})\b/i
+  );
+
+  if (explicit?.[1]) return normalizeVolumeNumber(explicit[1]);
+
+  const trailing = normalized.match(/\b(\d{1,4})\s*$/);
+
+  if (trailing?.[1]) return normalizeVolumeNumber(trailing[1]);
+
+  const urlLike = normalized.match(/-(\d{1,4})(?:\.html)?$/);
+
+  if (urlLike?.[1]) return normalizeVolumeNumber(urlLike[1]);
+
+  return null;
+}
+
+function normalizeVolumeNumber(value: string): string {
+  const numeric = Number(value);
+
+  if (Number.isFinite(numeric)) {
+    return String(numeric);
+  }
+
+  return String(value).replace(/^0+/, "") || value;
+}
+
+function removeTrailingVolume(value: string): string {
+  return String(value || "")
+    .replace(
+      /\b(?:tomo|volumen|volume|vol|num|n|numero|número)\s*\.?\s*\d{1,4}\b/gi,
+      ""
+    )
+    .replace(/\s+\d{1,4}\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getImportantTokens(normalizedText: string): string[] {
+  const stopWords = new Set([
+    "el",
+    "la",
+    "los",
+    "las",
+    "un",
+    "una",
+    "unos",
+    "unas",
+    "de",
+    "del",
+    "en",
+    "a",
+    "al",
+    "y",
+    "o",
+    "por",
+    "para",
+    "con",
+    "sin",
+    "the",
+    "comic",
+    "comics",
+    "manga",
+    "tomo",
+    "vol",
+    "volume",
+    "volumen",
+    "num",
+    "numero",
+    "número"
+  ]);
+
+  return normalizedText
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => token.length > 1)
+    .filter((token) => !stopWords.has(token))
+    .filter((token) => !/^\d+$/.test(token));
+}
+
 function normalizeSearchText(value: string): string {
-  return normalizeText(value).replace(/\s+/g, " ").trim();
+  return normalizeText(value)
+    .replace(/[™®©]/g, "")
+    .replace(/[:_()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function cleanQuery(value: string): string {
-  return String(value || "").trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function cleanTitle(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/Comprar/gi, "")
+    .replace(/Añadir al carrito/gi, "")
+    .replace(/Vista rápida/gi, "")
+    .replace(/Oferta/gi, "")
+    .replace(/Agotado/gi, "")
+    .trim();
 }
 
 function absolutize(href: string): string {
@@ -270,13 +463,41 @@ function absolutize(href: string): string {
   return `${BASE_URL}/${href}`;
 }
 
+function isProductUrl(url: string): boolean {
+  const normalized = url.toLowerCase();
+
+  if (!normalized.startsWith("http")) return false;
+  if (!normalized.includes("normacomics.com")) return false;
+  if (!normalized.endsWith(".html")) return false;
+
+  if (normalized.includes("/catalogsearch/")) return false;
+  if (normalized.includes("/checkout/")) return false;
+  if (normalized.includes("/customer/")) return false;
+  if (normalized.includes("/wishlist/")) return false;
+
+  return true;
+}
+
 function computeConfidence(item: Item, matchedTitle: string): number {
   const wanted = normalizeSearchText(item.name);
+  const wantedBase = normalizeSearchText(removeTrailingVolume(item.name));
   const matched = normalizeSearchText(matchedTitle);
+  const matchedBase = normalizeSearchText(removeTrailingVolume(matchedTitle));
 
-  return Number(
-    Math.max(0.2, Math.min(0.92, similarityScore(wanted, matched))).toFixed(2)
-  );
+  let confidence = 0.4;
+
+  confidence += similarityScore(wantedBase || wanted, matchedBase || matched) * 0.35;
+
+  if (matched === wanted) confidence += 0.2;
+  if (matchedBase === wantedBase) confidence += 0.15;
+
+  if (isSameComicVolume(item.name, matchedTitle)) {
+    confidence += 0.12;
+  } else {
+    confidence -= 0.35;
+  }
+
+  return Number(Math.max(0.2, Math.min(0.92, confidence)).toFixed(2));
 }
 
 function logHtmlDiagnostics(html: string) {
