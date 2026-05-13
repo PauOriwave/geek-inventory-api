@@ -2,6 +2,7 @@ import { Item, Prisma } from "@prisma/client";
 import prisma from "../prisma/client";
 
 import { getPriceChartingVideogamePrice } from "./sources/pricecharting-videogame.source";
+import { getPriceChartingComicPrice } from "./sources/pricecharting-comic.source";
 import { getWorldViceousPrice } from "./sources/world-viceous.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
@@ -73,6 +74,12 @@ const sources: SourceDefinition[] = [
     priority: 76,
     categories: ["book"],
     handler: getLaCentralPrice
+  },
+  {
+    name: "pricecharting_comic",
+    priority: 89,
+    categories: ["comic"],
+    handler: getPriceChartingComicPrice
   },
   {
     name: "norma_comics",
