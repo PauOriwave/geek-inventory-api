@@ -43,6 +43,7 @@ type SourceDefinition = {
 const MIN_CONFIDENCE_FOR_VALUATION = 0.5;
 const HIGH_CONFIDENCE_THRESHOLD = 0.88;
 const TCG_DUNGEON_MARVELS_MIN_CONFIDENCE = 0.8;
+const MERCH_MIN_CONFIDENCE = 0.65;
 
 const sources: SourceDefinition[] = [
   {
@@ -108,7 +109,15 @@ const sources: SourceDefinition[] = [
   {
     name: "dungeon_marvels",
     priority: 86,
-    categories: ["boardgame", "miniature", "comic", "tcg", "figure", "lego"],
+    categories: [
+      "boardgame",
+      "miniature",
+      "comic",
+      "tcg",
+      "figure",
+      "lego",
+      "merch"
+    ],
     handler: getDungeonMarvelsPrice
   },
   {
@@ -176,6 +185,12 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
       );
     }
 
+    return categorySources.filter((source) =>
+      ["dungeon_marvels", "goblin_trader"].includes(source.name)
+    );
+  }
+
+  if (item.category === "merch") {
     return categorySources.filter((source) =>
       ["dungeon_marvels", "goblin_trader"].includes(source.name)
     );
@@ -525,6 +540,10 @@ function getMinimumConfidenceForResult(
 ): number {
   if (item.category === "tcg" && result.source === "dungeon_marvels") {
     return TCG_DUNGEON_MARVELS_MIN_CONFIDENCE;
+  }
+
+  if (item.category === "merch") {
+    return MERCH_MIN_CONFIDENCE;
   }
 
   return MIN_CONFIDENCE_FOR_VALUATION;
