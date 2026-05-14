@@ -15,6 +15,23 @@ type PriceChartingCandidate = {
   score: number;
 };
 
+type DetailResult = {
+  title: string | null;
+  consoleName: string | null;
+  prices: {
+    loose: number | null;
+    complete: number | null;
+    new: number | null;
+    graded: number | null;
+  };
+  recentSales: Array<{
+    date: string;
+    title: string;
+    price: number | null;
+    source: string;
+  }>;
+};
+
 const BASE_URL = "https://www.pricecharting.com";
 const REQUEST_TIMEOUT_MS = 12000;
 
@@ -45,7 +62,6 @@ export async function getPriceChartingComicPrice(
     if (!html) continue;
 
     const extracted = extractCandidates(html, item);
-
     allCandidates.push(...extracted);
 
     if (allCandidates.length > 0) break;
@@ -76,17 +92,6 @@ export async function getPriceChartingComicPrice(
 
   const detail = await fetchProductDetail(best.url);
 
-  const selectedPrice =
-    detail?.prices.complete ??
-    detail?.prices.loose ??
-    best.completePrice ??
-    best.loosePrice ??
-    best.newPrice;
-
-  if (!selectedPrice || selectedPrice <= 0) {
-    return null;
-  }
-
   console.log("📈 PriceCharting Comic detail parsed:", {
     url: best.url,
     title: detail?.title,
@@ -94,6 +99,28 @@ export async function getPriceChartingComicPrice(
     prices: detail?.prices,
     recentSales: detail?.recentSales?.slice(0, 5)
   });
+
+  const selectedPrice = choosePrice(item, {
+    loose: detail?.prices.loose ?? best.loosePrice,
+    complete: detail?.prices.complete ?? best.completePrice,
+    new: detail?.prices.new ?? best.newPrice,
+    graded: detail?.prices.graded ?? best.gradedPrice
+  });
+
+  if (!selectedPrice || selectedPrice <= 0) {
+    console.log("📈 PriceCharting Comic matched but no usable price:", {
+      title: detail?.title ?? best.title,
+      prices: detail?.prices ?? {
+        loose: best.loosePrice,
+        complete: best.completePrice,
+        new: best.newPrice,
+        graded: best.gradedPrice
+      },
+      url: best.url
+    });
+
+    return null;
+  }
 
   return {
     price: Number(selectedPrice.toFixed(2)),
@@ -108,13 +135,15 @@ export async function getPriceChartingComicPrice(
       category: "comic",
       url: best.url,
       consoleName: detail?.consoleName ?? best.consoleName,
+      priceBasis: choosePriceBasis(item),
       prices: detail?.prices ?? {
         loose: best.loosePrice,
         complete: best.completePrice,
         new: best.newPrice,
         graded: best.gradedPrice
       },
-      recentSales: detail?.recentSales ?? []
+      recentSales: detail?.recentSales ?? [],
+      candidate: best
     }
   };
 }
@@ -176,21 +205,15 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-function extractCandidates(
-  html: string,
-  item: Item
-): PriceChartingCandidate[] {
+function extractCandidates(html: string, item: Item): PriceChartingCandidate[] {
   const $ = cheerio.load(html);
-
   const candidates: PriceChartingCandidate[] = [];
 
   $("a[href]").each((_, element) => {
     const href = $(element).attr("href") || "";
-
     if (!href) return;
 
     const url = absolutize(href);
-
     if (!isComicProductUrl(url)) return;
 
     const row =
@@ -200,16 +223,14 @@ function extractCandidates(
 
     const title =
       cleanTitle($(element).text()) ||
-      cleanTitle(row.find("a").first().text());
+      cleanTitle(row.find("a").first().text()) ||
+      titleFromUrl(url);
 
     if (!title) return;
 
     const rowText = row.text();
-
     const prices = extractPrices(rowText);
-
     const consoleName = extractConsoleName(url);
-
     const score = scoreCandidate(item, title, consoleName, url);
 
     if (score < 0.45) return;
@@ -235,80 +256,52 @@ function extractPrices(text: string): {
   new: number | null;
   graded: number | null;
 } {
-  const matches = [...text.matchAll(/\$?\s?(\d+(?:\.\d{1,2})?)/g)]
+  const prices = [...String(text || "").matchAll(/\$\s*(\d{1,6}(?:\.\d{1,2})?)/g)]
     .map((match) => Number(match[1]))
-    .filter((value) => Number.isFinite(value));
+    .filter((value) => Number.isFinite(value) && value > 0 && value < 100000);
 
   return {
-    loose: matches[0] ?? null,
-    complete: matches[1] ?? null,
-    new: matches[2] ?? null,
-    graded: matches[3] ?? null
+    loose: prices[0] ?? null,
+    complete: prices[1] ?? null,
+    new: prices[2] ?? null,
+    graded: prices[3] ?? null
   };
 }
 
-async function fetchProductDetail(url: string): Promise<{
-  title: string | null;
-  consoleName: string | null;
-  prices: {
-    loose: number | null;
-    complete: number | null;
-    new: number | null;
-    graded: number | null;
-  };
-  recentSales: Array<{
-    date: string;
-    title: string;
-    price: number | null;
-    source: string;
-  }>;
-} | null> {
+async function fetchProductDetail(url: string): Promise<DetailResult | null> {
   const html = await fetchHtml(url);
   if (!html) return null;
 
   const $ = cheerio.load(html);
 
   const title =
-    $("h1").first().text().trim() ||
-    $("title").text().trim() ||
+    cleanDetailTitle($("h1").first().text()) ||
+    cleanDetailTitle($("title").text()) ||
+    titleFromUrl(url) ||
     null;
 
   const consoleName =
-    $(".console-name").first().text().trim() ||
+    cleanTitle($(".console-name").first().text()) ||
     extractConsoleName(url);
 
+  const bodyText = normalizeWhitespace($("body").text());
+
   const prices = {
-    loose: extractPriceFromLabel($, "Loose"),
-    complete: extractPriceFromLabel($, "Complete"),
-    new: extractPriceFromLabel($, "New"),
-    graded: extractPriceFromLabel($, "Graded")
+    loose:
+      extractPriceByLabels(bodyText, ["Ungraded Price", "Loose Price", "Ungraded"]) ??
+      null,
+    complete:
+      extractPriceByLabels(bodyText, ["Grade 9.2", "Complete Price", "CIB Price"]) ??
+      null,
+    new:
+      extractPriceByLabels(bodyText, ["Grade 9.8", "New Price", "New"]) ??
+      null,
+    graded:
+      extractPriceByLabels(bodyText, ["Graded Price", "CGC 9.8", "PSA 10"]) ??
+      null
   };
 
-  const recentSales: Array<{
-    date: string;
-    title: string;
-    price: number | null;
-    source: string;
-  }> = [];
-
-  $("table tr").each((_, row) => {
-    const cells = $(row).find("td");
-
-    if (cells.length < 3) return;
-
-    const date = cleanTitle($(cells[0]).text());
-    const title = cleanTitle($(cells[1]).text());
-    const price = parseDollarPrice($(cells[2]).text());
-
-    if (!date || !title) return;
-
-    recentSales.push({
-      date,
-      title,
-      price,
-      source: "ebay"
-    });
-  });
+  const recentSales = extractRecentSales($);
 
   return {
     title,
@@ -318,13 +311,130 @@ async function fetchProductDetail(url: string): Promise<{
   };
 }
 
-function extractPriceFromLabel(
-  $: cheerio.CheerioAPI,
-  label: string
-): number | null {
-  const text = $(`*:contains("${label}")`).first().parent().text();
+function extractPriceByLabels(text: string, labels: string[]): number | null {
+  for (const label of labels) {
+    const escaped = escapeRegExp(label);
 
-  return parseDollarPrice(text);
+    const patterns = [
+      new RegExp(`${escaped}\\s*\\$\\s*(\\d{1,6}(?:\\.\\d{1,2})?)`, "i"),
+      new RegExp(`${escaped}[^$]{0,80}\\$\\s*(\\d{1,6}(?:\\.\\d{1,2})?)`, "i")
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+
+      if (!match?.[1]) continue;
+
+      const price = Number(match[1]);
+
+      if (Number.isFinite(price) && price > 0 && price < 100000) {
+        return price;
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractRecentSales($: cheerio.CheerioAPI): Array<{
+  date: string;
+  title: string;
+  price: number | null;
+  source: string;
+}> {
+  const sales: Array<{
+    date: string;
+    title: string;
+    price: number | null;
+    source: string;
+  }> = [];
+
+  $("tr").each((_, row) => {
+    const root = $(row);
+    const rowText = normalizeWhitespace(root.text());
+
+    if (!/\d{4}-\d{2}-\d{2}/.test(rowText)) return;
+    if (!rowText.includes("$")) return;
+    if (isBadSaleRow(rowText)) return;
+
+    const date = rowText.match(/\d{4}-\d{2}-\d{2}/)?.[0];
+    if (!date) return;
+
+    const price = extractFirstDollarPrice(rowText);
+    if (!price || price <= 0) return;
+
+    const anchorTitles = root
+      .find("a")
+      .map((_, link) => cleanSaleTitle($(link).text()))
+      .get()
+      .filter(Boolean)
+      .filter((value) => !isBadSaleTitle(value));
+
+    const title =
+      anchorTitles[0] ||
+      cleanSaleTitle(
+        rowText
+          .replace(/\d{4}-\d{2}-\d{2}/g, "")
+          .replace(/\$\s*\d{1,6}(?:\.\d{1,2})?/g, "")
+      );
+
+    if (!title || isBadSaleTitle(title)) return;
+
+    sales.push({
+      date,
+      title,
+      price,
+      source: rowText.toLowerCase().includes("ebay") ? "ebay" : "unknown"
+    });
+  });
+
+  return sales.slice(0, 20);
+}
+
+function choosePrice(item: Item, prices: {
+  loose: number | null;
+  complete: number | null;
+  new: number | null;
+  graded: number | null;
+}): number | null {
+  const basis = choosePriceBasis(item);
+
+  if (basis === "graded") {
+    return prices.graded ?? prices.new ?? prices.complete ?? prices.loose ?? null;
+  }
+
+  if (basis === "new") {
+    return prices.new ?? prices.complete ?? prices.loose ?? null;
+  }
+
+  return prices.loose ?? prices.complete ?? prices.new ?? prices.graded ?? null;
+}
+
+function choosePriceBasis(item: Item): "loose" | "new" | "graded" {
+  const context = normalizeSearchText(
+    `${item.condition ?? ""} ${item.notes ?? ""}`
+  );
+
+  if (
+    context.includes("graded") ||
+    context.includes("cgc") ||
+    context.includes("cbcs") ||
+    context.includes("psa") ||
+    context.includes("slab")
+  ) {
+    return "graded";
+  }
+
+  if (
+    context.includes("new") ||
+    context.includes("nuevo") ||
+    context.includes("sealed") ||
+    context.includes("precintado")
+  ) {
+    return "new";
+  }
+
+  return "loose";
 }
 
 function scoreCandidate(
@@ -334,9 +444,7 @@ function scoreCandidate(
   url: string
 ): number {
   const wanted = normalizeSearchText(item.name);
-  const candidate = normalizeSearchText(
-    `${title} ${consoleName ?? ""}`
-  );
+  const candidate = normalizeSearchText(`${title} ${consoleName ?? ""}`);
 
   let score = similarityScore(wanted, candidate);
 
@@ -345,10 +453,7 @@ function scoreCandidate(
   }
 
   const wantedTokens = wanted.split(" ").filter(Boolean);
-
-  const matchedTokens = wantedTokens.filter((token) =>
-    candidate.includes(token)
-  );
+  const matchedTokens = wantedTokens.filter((token) => candidate.includes(token));
 
   score += (matchedTokens.length / Math.max(1, wantedTokens.length)) * 1.2;
 
@@ -372,13 +477,8 @@ function scoreCandidate(
     score -= 1.1;
   }
 
-  const wantedContext = normalizeSearchText(
-    `${item.name} ${item.notes ?? ""}`
-  );
-
-  const candidateContext = normalizeSearchText(
-    `${title} ${url} ${consoleName ?? ""}`
-  );
+  const wantedContext = normalizeSearchText(`${item.name} ${item.notes ?? ""}`);
+  const candidateContext = normalizeSearchText(`${title} ${url} ${consoleName ?? ""}`);
 
   const variantPenaltyTerms = [
     "facsimile",
@@ -431,9 +531,7 @@ function isComicContext(
   url: string,
   consoleName: string | null
 ): boolean {
-  const text = normalizeSearchText(
-    `${title} ${url} ${consoleName ?? ""}`
-  );
+  const text = normalizeSearchText(`${title} ${url} ${consoleName ?? ""}`);
 
   return (
     text.includes("comic") ||
@@ -449,9 +547,7 @@ function isClearlyNonComic(
   url: string,
   consoleName: string | null
 ): boolean {
-  const text = normalizeSearchText(
-    `${title} ${url} ${consoleName ?? ""}`
-  );
+  const text = normalizeSearchText(`${title} ${url} ${consoleName ?? ""}`);
 
   const blocked = [
     "dvd",
@@ -494,40 +590,83 @@ function isComicProductUrl(url: string): boolean {
 function extractConsoleName(url: string): string | null {
   try {
     const parsed = new URL(url);
-
     const parts = parsed.pathname.split("/").filter(Boolean);
 
-    return parts[1]
-      ?.replace(/-/g, " ")
-      .replace(/\b\w/g, (char) => char.toUpperCase()) ?? null;
+    return (
+      parts[1]
+        ?.replace(/-/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase()) ?? null
+    );
   } catch {
     return null;
   }
 }
 
+function titleFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
+
+    return cleanTitle(last.replace(/-/g, " "));
+  } catch {
+    return "";
+  }
+}
+
 function parseDollarPrice(text: string | null | undefined): number | null {
   const value = String(text || "");
-
-  const match = value.match(/(\d+(?:\.\d{1,2})?)/);
+  const match = value.match(/\$\s*(\d{1,6}(?:\.\d{1,2})?)/);
 
   if (!match?.[1]) return null;
 
   const parsed = Number(match[1]);
 
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function extractFirstDollarPrice(text: string): number | null {
+  return parseDollarPrice(text);
+}
+
+function isBadSaleRow(text: string): boolean {
+  const normalized = normalizeSearchText(text);
+
+  return (
+    normalized.includes("time warp") ||
+    normalized.includes("subscribe") ||
+    normalized.includes("photos of completed sales") ||
+    normalized.includes("pricecharting pro") ||
+    normalized.includes("remove ads") ||
+    normalized.includes("volume:")
+  );
+}
+
+function isBadSaleTitle(value: string): boolean {
+  const normalized = normalizeSearchText(value);
+
+  if (!normalized || normalized.length < 4) return true;
+
+  return (
+    normalized === "buy" ||
+    normalized === "view" ||
+    normalized === "subscribe" ||
+    normalized.includes("time warp") ||
+    normalized.includes("completed sales") ||
+    normalized.includes("pricecharting")
+  );
 }
 
 function normalizeSearchText(value: string): string {
   return normalizeText(value)
     .replace(/[#]/g, " ")
+    .replace(/[™®©]/g, "")
+    .replace(/[:_()[\]{}]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function cleanQuery(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function cleanTitle(value: string): string {
@@ -535,6 +674,30 @@ function cleanTitle(value: string): string {
     .replace(/\s+/g, " ")
     .replace(/\n/g, " ")
     .trim();
+}
+
+function cleanDetailTitle(value: string): string {
+  return cleanTitle(value)
+    .replace(/\s*Prices\s*$/gi, "")
+    .replace(/\s*New\s*&\s*Loose\s*Values\s*$/gi, "")
+    .trim();
+}
+
+function cleanSaleTitle(value: string): string {
+  return cleanTitle(value)
+    .replace(/^>+\s*/g, "")
+    .replace(/\bSubscribe\b/gi, "")
+    .replace(/\bBuy\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeWhitespace(value: string): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function absolutize(href: string): string {
