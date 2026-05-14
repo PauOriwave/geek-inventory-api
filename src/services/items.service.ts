@@ -42,6 +42,7 @@ type ListItemsInput = {
 };
 
 type UpdateItemInput = {
+  category?: string;
   quantity?: number;
   estimatedPrice?: number;
   condition?: string;
@@ -51,11 +52,6 @@ type UpdateItemInput = {
   notes?: string;
 };
 
-function normalizeCategory(category?: string | null) {
-  if (!category) return "merch";
-  return category === "other" ? "merch" : category;
-}
-
 function hasValuationIdentityChanged(
   current: {
     platform: string | null;
@@ -64,12 +60,19 @@ function hasValuationIdentityChanged(
   incoming: UpdateItemInput
 ) {
   const nextPlatform =
-    incoming.platform !== undefined ? incoming.platform || null : current.platform;
+    incoming.platform !== undefined
+      ? incoming.platform || null
+      : current.platform;
 
   const nextRegion =
-    incoming.region !== undefined ? incoming.region || null : current.region;
+    incoming.region !== undefined
+      ? incoming.region || null
+      : current.region;
 
-  return nextPlatform !== current.platform || nextRegion !== current.region;
+  return (
+    nextPlatform !== current.platform ||
+    nextRegion !== current.region
+  );
 }
 
 export async function createItemService(input: CreateItemInput) {
@@ -97,13 +100,11 @@ export async function createItemService(input: CreateItemInput) {
     }
   }
 
-  const normalizedCategory = normalizeCategory(input.category);
-
   const item = await prisma.item.create({
     data: {
       userId: input.userId,
       name: input.name,
-      category: normalizedCategory,
+      category: input.category,
       estimatedPrice: input.estimatedPrice,
       quantity: input.quantity,
       condition: input.condition || null,
@@ -149,7 +150,7 @@ export async function listItemsService(input: ListItemsInput) {
   }
 
   if (input.category) {
-    where.category = normalizeCategory(input.category);
+    where.category = input.category;
   }
 
   if (input.minPrice != null || input.maxPrice != null) {
@@ -159,24 +160,31 @@ export async function listItemsService(input: ListItemsInput) {
     };
   }
 
-  let orderBy: Record<string, "asc" | "desc"> = { createdAt: "desc" };
+  let orderBy: Record<string, "asc" | "desc"> = {
+    createdAt: "desc"
+  };
 
   switch (input.sort) {
     case "price_asc":
       orderBy = { estimatedPrice: "asc" };
       break;
+
     case "price_desc":
       orderBy = { estimatedPrice: "desc" };
       break;
+
     case "name_asc":
       orderBy = { name: "asc" };
       break;
+
     case "name_desc":
       orderBy = { name: "desc" };
       break;
+
     case "created_asc":
       orderBy = { createdAt: "asc" };
       break;
+
     case "created_desc":
     default:
       orderBy = { createdAt: "desc" };
@@ -190,6 +198,7 @@ export async function listItemsService(input: ListItemsInput) {
       skip,
       take: pageSize
     }),
+
     prisma.item.count({ where })
   ]);
 
@@ -201,7 +210,10 @@ export async function listItemsService(input: ListItemsInput) {
   };
 }
 
-export async function getItemByIdService(userId: string, id: string) {
+export async function getItemByIdService(
+  userId: string,
+  id: string
+) {
   return prisma.item.findFirst({
     where: {
       id,
@@ -210,7 +222,10 @@ export async function getItemByIdService(userId: string, id: string) {
   });
 }
 
-export async function getItemSnapshotsService(userId: string, id: string) {
+export async function getItemSnapshotsService(
+  userId: string,
+  id: string
+) {
   const item = await prisma.item.findFirst({
     where: {
       id,
@@ -244,26 +259,45 @@ export async function updateItemService(
     return null;
   }
 
-  const shouldInvalidateStoredValuation = hasValuationIdentityChanged(item, data);
+  const shouldInvalidateStoredValuation =
+    hasValuationIdentityChanged(item, data);
 
   const updated = await prisma.item.update({
     where: { id },
+
     data: {
-      ...(data.quantity != null ? { quantity: data.quantity } : {}),
+      ...(data.category !== undefined
+        ? { category: data.category || "merch" }
+        : {}),
+
+      ...(data.quantity != null
+        ? { quantity: data.quantity }
+        : {}),
+
       ...(data.estimatedPrice != null
         ? { estimatedPrice: data.estimatedPrice }
         : {}),
+
       ...(data.condition !== undefined
         ? { condition: data.condition || null }
         : {}),
+
       ...(data.platform !== undefined
         ? { platform: data.platform || null }
         : {}),
+
       ...(data.completeness !== undefined
         ? { completeness: data.completeness || null }
         : {}),
-      ...(data.region !== undefined ? { region: data.region || null } : {}),
-      ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
+
+      ...(data.region !== undefined
+        ? { region: data.region || null }
+        : {}),
+
+      ...(data.notes !== undefined
+        ? { notes: data.notes || null }
+        : {}),
+
       ...(shouldInvalidateStoredValuation
         ? {
             marketValue: null,
@@ -293,7 +327,10 @@ export async function updateItemService(
   return updated;
 }
 
-export async function deleteItemService(userId: string, id: string) {
+export async function deleteItemService(
+  userId: string,
+  id: string
+) {
   const item = await prisma.item.findFirst({
     where: {
       id,

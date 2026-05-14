@@ -129,7 +129,7 @@ export const createItem = async (req: Request, res: Response) => {
       return res.status(403).json({
         message: "Free plan item limit reached",
         code: "FREE_ITEM_LIMIT_REACHED",
-        limit: 25
+        limit: error.limit
       });
     }
 
@@ -199,7 +199,9 @@ export const updateItem = async (req: Request, res: Response) => {
   }
 
   const id = String(req.params.id);
+
   const {
+    category,
     quantity,
     estimatedPrice,
     condition,
@@ -210,6 +212,12 @@ export const updateItem = async (req: Request, res: Response) => {
   } = req.body;
 
   const item = await updateItemService(userId, id, {
+    category:
+      typeof category === "string"
+        ? category
+        : category === null
+          ? "merch"
+          : undefined,
     quantity: toOptionalNumber(quantity),
     estimatedPrice: toOptionalNumber(estimatedPrice),
     condition:
@@ -310,7 +318,9 @@ export const valuateItem = async (req: Request, res: Response) => {
         confidence: valuation.confidence
       },
       lastValuationAt:
-        "lastValuationAt" in valuation ? valuation.lastValuationAt : item.lastValuationAt,
+        "lastValuationAt" in valuation
+          ? valuation.lastValuationAt
+          : item.lastValuationAt,
       stale: item.lastValuationAt == null
     });
   } catch (err) {
