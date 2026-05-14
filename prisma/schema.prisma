@@ -16,7 +16,7 @@ enum Category {
   miniature
   lego
   movie
-  other
+  merch
 }
 
 enum ScraperRunStatus {

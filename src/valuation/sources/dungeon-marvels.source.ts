@@ -24,7 +24,7 @@ const SUPPORTED_CATEGORIES = new Set([
   "boardgame",
   "miniature",
   "figure",
-  "other"
+  "merch"
 ]);
 
 export async function getDungeonMarvelsPrice(

@@ -27,7 +27,7 @@ const allowedCategories = new Set([
   "boardgame",
   "lego",
   "movie",
-  "other"
+  "merch"
 ]);
 
 function toNumber(value: unknown): number | null {

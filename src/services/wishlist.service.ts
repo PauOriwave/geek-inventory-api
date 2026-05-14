@@ -68,7 +68,7 @@ export async function createWishlistService(input: CreateWishlistInput) {
     data: {
       userId: input.userId,
       name: input.name,
-      category: input.category || "other",
+      category: input.category || "merch",
       targetPrice: input.targetPrice ?? null,
       currentMarketValue: input.currentMarketValue ?? null,
       platform: input.platform || null,

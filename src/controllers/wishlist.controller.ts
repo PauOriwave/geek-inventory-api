@@ -95,7 +95,7 @@ export async function moveWishlistItemToCollection(
   const createdItem = await prisma.item.create({
     data: {
       name: wishlistItem.name,
-      category: wishlistItem.category || "other",
+      category: wishlistItem.category || "merch",
       estimatedPrice: wishlistItem.targetPrice || 0,
       quantity: 1,
       userId,

@@ -114,7 +114,7 @@ const sources: SourceDefinition[] = [
   {
     name: "goblin_trader",
     priority: 88,
-    categories: ["boardgame", "miniature", "figure", "other"],
+    categories: ["boardgame", "miniature", "figure", "merch"],
     handler: getGoblinTraderPrice
   },
   {

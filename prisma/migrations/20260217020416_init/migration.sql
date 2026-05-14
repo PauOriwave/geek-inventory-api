@@ -1,5 +1,5 @@
 -- CreateEnum
-CREATE TYPE "Category" AS ENUM ('videogame', 'book', 'comic', 'tcg', 'figure', 'other');
+CREATE TYPE "Category" AS ENUM ('videogame', 'book', 'comic', 'tcg', 'figure', 'merch');
 
 -- CreateTable
 CREATE TABLE "Item" (
