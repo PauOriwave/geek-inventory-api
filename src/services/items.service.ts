@@ -51,6 +51,11 @@ type UpdateItemInput = {
   notes?: string;
 };
 
+function normalizeCategory(category?: string | null) {
+  if (!category) return "merch";
+  return category === "other" ? "merch" : category;
+}
+
 function hasValuationIdentityChanged(
   current: {
     platform: string | null;
@@ -92,11 +97,13 @@ export async function createItemService(input: CreateItemInput) {
     }
   }
 
+  const normalizedCategory = normalizeCategory(input.category);
+
   const item = await prisma.item.create({
     data: {
       userId: input.userId,
       name: input.name,
-      category: input.category,
+      category: normalizedCategory,
       estimatedPrice: input.estimatedPrice,
       quantity: input.quantity,
       condition: input.condition || null,
@@ -142,7 +149,7 @@ export async function listItemsService(input: ListItemsInput) {
   }
 
   if (input.category) {
-    where.category = input.category;
+    where.category = normalizeCategory(input.category);
   }
 
   if (input.minPrice != null || input.maxPrice != null) {

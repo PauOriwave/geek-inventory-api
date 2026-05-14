@@ -28,6 +28,11 @@ type CreateWishlistInput = {
   notes?: string;
 };
 
+function normalizeCategory(category?: string | null) {
+  if (!category) return "merch";
+  return category === "other" ? "merch" : category;
+}
+
 export async function listWishlistService({
   userId
 }: {
@@ -68,7 +73,7 @@ export async function createWishlistService(input: CreateWishlistInput) {
     data: {
       userId: input.userId,
       name: input.name,
-      category: input.category || "merch",
+      category: normalizeCategory(input.category),
       targetPrice: input.targetPrice ?? null,
       currentMarketValue: input.currentMarketValue ?? null,
       platform: input.platform || null,
