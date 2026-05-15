@@ -19,6 +19,7 @@ import { getLaCentralPrice } from "./sources/la-central.source";
 import { getTodosTusLibrosPrice } from "./sources/todos-tus-libros.source";
 import { getFunkoEuropePrice } from "./sources/funko-europe.source";
 import { getPriceChartingFunkoPrice } from "./sources/pricecharting-funko.source";
+import { getKurogamiMerchPrice } from "./sources/kurogami-merch.source";
 
 import {
   ScraperAttemptLog,
@@ -107,6 +108,12 @@ const sources: SourceDefinition[] = [
     handler: getFunkoEuropePrice
   },
   {
+    name: "kurogami_merch",
+    priority: 89,
+    categories: ["merch"],
+    handler: getKurogamiMerchPrice
+  },
+  {
     name: "dungeon_marvels",
     priority: 86,
     categories: [
@@ -192,7 +199,9 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
 
   if (item.category === "merch") {
     return categorySources.filter((source) =>
-      ["dungeon_marvels", "goblin_trader"].includes(source.name)
+      ["kurogami_merch", "dungeon_marvels", "goblin_trader"].includes(
+        source.name
+      )
     );
   }
 
