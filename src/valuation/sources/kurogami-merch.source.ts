@@ -21,69 +21,19 @@ const REQUEST_TIMEOUT_MS = 10000;
 const SUPPORTED_CATEGORIES = new Set(["merch"]);
 
 const MERCH_CATEGORY_URLS: Record<string, string[]> = {
-  plush: [
-    "/es/categoria/peluches-anime",
-    "/es/categoria/peluches-videojuegos",
-    "/es/categoria/peluches-cine",
-    "/en/category/anime-plush-toys",
-    "/en/category/video-game-plush-toys"
-  ],
-  mug: [
-    "/es/categoria/tazas-anime",
-    "/es/categoria/tazas-videojuegos",
-    "/es/categoria/tazas-cine",
-    "/en/category/anime-mugs",
-    "/en/category/video-game-mugs"
-  ],
-  poster: [
-    "/es/categoria/posters-anime",
-    "/es/categoria/posters-videojuegos",
-    "/es/categoria/posters-cine",
-    "/en/category/anime-posters",
-    "/en/category/video-game-posters"
-  ],
-  keychain: [
-    "/es/categoria/llaveros-anime",
-    "/es/categoria/llaveros-videojuegos",
-    "/es/categoria/llaveros-cine",
-    "/en/category/anime-keychains",
-    "/en/category/video-game-keychains"
-  ],
-  pin: [
-    "/es/categoria/pins-anime",
-    "/es/categoria/pins-videojuegos",
-    "/es/categoria/pins-cine",
-    "/en/category/anime-pins",
-    "/en/category/video-game-pins"
-  ],
-  mousepad: [
-    "/es/categoria/alfombrillas-anime",
-    "/es/categoria/alfombrillas-videojuegos",
-    "/es/categoria/alfombrillas-cine",
-    "/en/category/anime-mouse-pads",
-    "/en/category/video-game-mouse-pads"
-  ],
-  apparel: [
-    "/es/categoria/ropa-friki",
-    "/en/category/geek-clothes"
-  ],
-  artprint: [
-    "/es/categoria/posters-anime",
-    "/es/categoria/posters-videojuegos",
-    "/en/category/anime-posters",
-    "/en/category/video-game-posters"
-  ],
-  acrylicstand: [
-    "/es/familia/regalos-anime",
-    "/es/familia/merchandising-kurogami",
-    "/en/category/anime-gifts"
-  ],
+  plush: ["/es/familia/peluches"],
+  mug: ["/es/familia/tazas"],
+  poster: ["/es/familia/posters"],
+  keychain: ["/es/familia/llaveros"],
+  pin: ["/es/familia/pins"],
+  mousepad: ["/es/familia/alfombrillas"],
+  apparel: ["/es/familia/ropa"],
+  artprint: ["/es/familia/posters"],
+  acrylicstand: ["/es/familia/regalos-anime"],
   othermerch: [
     "/es/familia/regalos-anime",
     "/es/familia/regalos-videojuegos",
-    "/es/familia/merchandising-kurogami",
-    "/en/category/anime-gifts",
-    "/en/category/video-game-gifts"
+    "/es/familia/merchandising-kurogami"
   ]
 };
 
@@ -97,130 +47,296 @@ export async function getKurogamiMerchPrice(
     platform: item.platform
   });
 
-  if (!SUPPORTED_CATEGORIES.has(item.category)) {
-    return null;
+  if (!SUPPORTED_CATEGORIES.has(item.category)) return null;
+
+  const queries = buildSearchQueries(item);
+
+  for (const query of queries) {
+    const resultFromDirectSlugs = await tryDirectProductSlugs(item, query);
+
+    if (resultFromDirectSlugs) {
+      return resultFromDirectSlugs;
+    }
+
+    const urls = buildSearchUrls(item, query);
+
+    for (const url of urls) {
+      console.log("🧧 Kurogami crawling:", url);
+
+      const html = await fetchHtml(url);
+      if (!html) continue;
+
+      console.log("🧧 Kurogami html length:", html.length, "query:", query);
+
+      const candidates = extractCandidates(html);
+
+      console.log(
+        "🧧 Kurogami candidates:",
+        candidates.map((candidate) => ({
+          title: candidate.title,
+          price: candidate.price,
+          url: candidate.url
+        }))
+      );
+
+      const filtered = filterCandidates(item, candidates);
+
+      console.log(
+        "🧧 Kurogami filtered:",
+        filtered.map((candidate) => ({
+          title: candidate.title,
+          price: candidate.price,
+          url: candidate.url
+        }))
+      );
+
+      const best = pickBestCandidate(item, filtered);
+
+      if (!best) {
+        console.log("🧧 Kurogami candidates found but no match:", query);
+        continue;
+      }
+
+      const result = await buildResultFromCandidate(item, best, query);
+
+      if (result) {
+        return result;
+      }
+    }
   }
 
-  const query = cleanQuery(item.name);
-  if (!query) return null;
+  return null;
+}
 
-  const urls = buildSearchUrls(item, query);
+async function tryDirectProductSlugs(
+  item: Item,
+  query: string
+): Promise<ScraperSourceResult | null> {
+  const urls = buildDirectProductUrls(item, query);
 
   for (const url of urls) {
-    console.log("🧧 Kurogami crawling:", url);
+    console.log("🧧 Kurogami direct product try:", url);
 
-    const html = await fetchHtml(url);
-    if (!html) continue;
+    const detail = await fetchDetail(url);
 
-    console.log("🧧 Kurogami html length:", html.length);
-
-    const candidates = extractCandidates(html);
-
-    console.log(
-      "🧧 Kurogami candidates:",
-      candidates.map((candidate) => ({
-        title: candidate.title,
-        price: candidate.price,
-        url: candidate.url
-      }))
-    );
-
-    const filtered = filterCandidates(item, candidates);
-
-    console.log(
-      "🧧 Kurogami filtered:",
-      filtered.map((candidate) => ({
-        title: candidate.title,
-        price: candidate.price,
-        url: candidate.url
-      }))
-    );
-
-    const best = pickBestCandidate(item, filtered);
-
-    if (!best) {
-      console.log("🧧 Kurogami candidates found but no match:", query);
+    if (!detail?.title || !detail.price || detail.price <= 0) {
       continue;
     }
 
-    const detail = await fetchDetail(best.url);
+    const candidate: Candidate = {
+      title: detail.title,
+      price: detail.price,
+      url
+    };
 
-    const finalPrice = chooseFinalPrice(best.price, detail?.price ?? null);
+    const filtered = filterCandidates(item, [candidate]);
 
-    if (!finalPrice || finalPrice <= 0) {
-      console.log("🧧 Kurogami matched but no usable price:", {
-        title: best.title,
-        url: best.url,
-        listingPrice: best.price,
-        detailPrice: detail?.price
+    if (filtered.length === 0) {
+      console.log("🧧 Kurogami direct rejected:", {
+        title: detail.title,
+        price: detail.price,
+        url
       });
 
       continue;
     }
 
-    const matchedTitle = detail?.title || best.title;
-    const confidence = computeConfidence(item, matchedTitle);
+    const result = await buildResultFromCandidate(item, candidate, query);
 
-    console.log("🧧 Kurogami selected:", {
-      title: matchedTitle,
-      listingPrice: best.price,
-      detailPrice: detail?.price,
-      finalPrice,
-      confidence,
-      url: best.url
-    });
-
-    return {
-      price: Number(finalPrice.toFixed(2)),
-      currency: "EUR",
-      source: "kurogami_merch",
-      confidence,
-      matchedTitle,
-      matchedUrl: best.url,
-      query,
-      metadata: {
-        provider: "kurogami",
-        currency: "EUR",
-        category: item.category,
-        platform: item.platform ?? null,
-        url: best.url
-      }
-    };
+    if (result) return result;
   }
 
   return null;
+}
+
+function buildDirectProductUrls(item: Item, query: string): string[] {
+  const platform = normalizePlatform(item.platform);
+  const normalizedQuery = normalizeSearchText(query);
+
+  const baseName = removePlatformWords(normalizedQuery, item.platform);
+  const slugBase = slugify(baseName);
+
+  const urls = new Set<string>();
+
+  if (slugBase) {
+    urls.add(`${BASE_URL}/es/producto/${slugBase}`);
+
+    if (platform === "plush") {
+      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-pokemon`);
+      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-20-cms-pokemon`);
+      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-20-cm-pokemon`);
+      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-version-3-pokemon-20-cm`);
+      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-pokemon-squishmallows-50-cm`);
+      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-sonriente-pokemon-32-cm`);
+    }
+
+    if (platform === "mug") {
+      urls.add(`${BASE_URL}/es/producto/taza-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/taza-${slugBase}-pokemon`);
+    }
+
+    if (platform === "keychain") {
+      urls.add(`${BASE_URL}/es/producto/llavero-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/llavero-${slugBase}-pokemon`);
+    }
+
+    if (platform === "poster" || platform === "artprint") {
+      urls.add(`${BASE_URL}/es/producto/poster-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/poster-${slugBase}-pokemon`);
+    }
+
+    if (platform === "mousepad") {
+      urls.add(`${BASE_URL}/es/producto/alfombrilla-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/tapete-${slugBase}`);
+    }
+
+    if (platform === "pin") {
+      urls.add(`${BASE_URL}/es/producto/pin-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/chapa-${slugBase}`);
+    }
+  }
+
+  return [...urls];
+}
+
+async function buildResultFromCandidate(
+  item: Item,
+  candidate: Candidate,
+  query: string
+): Promise<ScraperSourceResult | null> {
+  const detail = await fetchDetail(candidate.url);
+
+  const finalPrice = chooseFinalPrice(candidate.price, detail?.price ?? null);
+
+  if (!finalPrice || finalPrice <= 0) {
+    console.log("🧧 Kurogami matched but no usable price:", {
+      title: candidate.title,
+      url: candidate.url,
+      listingPrice: candidate.price,
+      detailPrice: detail?.price
+    });
+
+    return null;
+  }
+
+  const matchedTitle = detail?.title || candidate.title;
+  const confidence = computeConfidence(item, matchedTitle);
+
+  console.log("🧧 Kurogami selected:", {
+    title: matchedTitle,
+    listingPrice: candidate.price,
+    detailPrice: detail?.price,
+    finalPrice,
+    confidence,
+    url: candidate.url
+  });
+
+  return {
+    price: Number(finalPrice.toFixed(2)),
+    currency: "EUR",
+    source: "kurogami_merch",
+    confidence,
+    matchedTitle,
+    matchedUrl: candidate.url,
+    query,
+    metadata: {
+      provider: "kurogami",
+      currency: "EUR",
+      category: item.category,
+      platform: item.platform ?? null,
+      url: candidate.url
+    }
+  };
+}
+
+function buildSearchQueries(item: Item): string[] {
+  const raw = cleanQuery(item.name);
+  const platform = normalizePlatform(item.platform);
+  const normalized = normalizeSearchText(raw);
+
+  const queries = new Set<string>();
+
+  queries.add(raw);
+
+  if (platform === "plush") {
+    queries.add(raw.replace(/\bplush figure\b/gi, "peluche"));
+    queries.add(raw.replace(/\bplush\b/gi, "peluche"));
+    queries.add(toSpanishTypeFirst(raw, ["plush", "plush figure"], "Peluche"));
+  }
+
+  if (platform === "mug") {
+    queries.add(raw.replace(/\bmug\b/gi, "taza"));
+    queries.add(toSpanishTypeFirst(raw, ["mug"], "Taza"));
+  }
+
+  if (platform === "keychain") {
+    queries.add(raw.replace(/\bkeychain\b/gi, "llavero"));
+    queries.add(toSpanishTypeFirst(raw, ["keychain"], "Llavero"));
+  }
+
+  if (platform === "mousepad") {
+    queries.add(raw.replace(/\bmousepad\b/gi, "alfombrilla"));
+    queries.add(toSpanishTypeFirst(raw, ["mousepad"], "Alfombrilla"));
+  }
+
+  if (platform === "poster" || platform === "artprint") {
+    queries.add(raw.replace(/\bart print\b/gi, "poster"));
+    queries.add(raw.replace(/\bprint\b/gi, "poster"));
+    queries.add(toSpanishTypeFirst(raw, ["art print", "print"], "Poster"));
+  }
+
+  if (platform === "apparel") {
+    queries.add(raw.replace(/\bapparel\b/gi, "ropa"));
+    queries.add(raw.replace(/\bt-shirt\b/gi, "camiseta"));
+    queries.add(raw.replace(/\bshirt\b/gi, "camiseta"));
+  }
+
+  if (platform === "pin") {
+    queries.add(raw.replace(/\bpin\b/gi, "chapa"));
+    queries.add(raw.replace(/\bpin\b/gi, "pins"));
+  }
+
+  const tokens = normalized.split(" ").filter(Boolean);
+
+  if (tokens.length > 1) {
+    queries.add(tokens.slice(0, 4).join(" "));
+    queries.add(tokens.slice(0, 3).join(" "));
+  }
+
+  return [...queries]
+    .map((query) => query.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((query, index, arr) => arr.indexOf(query) === index)
+    .slice(0, 8);
+}
+
+function toSpanishTypeFirst(
+  value: string,
+  removableWords: string[],
+  spanishType: string
+): string {
+  let clean = value;
+
+  for (const word of removableWords) {
+    clean = clean.replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, "gi"), "");
+  }
+
+  clean = clean.replace(/\s+/g, " ").trim();
+
+  return `${spanishType} ${clean}`.trim();
 }
 
 function buildSearchUrls(item: Item, query: string): string[] {
   const platform = normalizePlatform(item.platform);
   const paths = MERCH_CATEGORY_URLS[platform] ?? MERCH_CATEGORY_URLS.othermerch;
 
+  const encoded = encodeURIComponent(query);
   const urls = new Set<string>();
 
   for (const path of paths) {
-    urls.add(absolutize(path));
-  }
-
-  const clean = cleanQuery(query);
-  const normalized = normalizeSearchText(clean);
-  const tokens = normalized.split(" ").filter(Boolean);
-
-  const reducedQueries = [
-    clean,
-    tokens.slice(0, 4).join(" "),
-    tokens.slice(0, 3).join(" "),
-    tokens.slice(0, 2).join(" ")
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  for (const searchQuery of reducedQueries) {
-    const encoded = encodeURIComponent(searchQuery);
-
-    urls.add(`${BASE_URL}/es/tienda?search=${encoded}`);
-    urls.add(`${BASE_URL}/en/store?search=${encoded}`);
-    urls.add(`${BASE_URL}/es/search?search=${encoded}`);
-    urls.add(`${BASE_URL}/en/search?search=${encoded}`);
+    urls.add(`${absolutize(path)}?search=${encoded}`);
+    urls.add(`${absolutize(path)}?s=${encoded}`);
   }
 
   return [...urls];
@@ -251,11 +367,7 @@ async function fetchHtml(url: string): Promise<string | null> {
 
     return await res.text();
   } catch (error) {
-    console.log("❌ Kurogami fetch error:", {
-      url,
-      error
-    });
-
+    console.log("❌ Kurogami fetch error:", { url, error });
     return null;
   } finally {
     clearTimeout(timeout);
@@ -285,6 +397,7 @@ function extractCandidates(html: string): Candidate[] {
 
     const priceText =
       root.find(".price").first().text().trim() ||
+      root.find("[class*='price']").first().text().trim() ||
       root.text();
 
     addCandidate({
@@ -320,16 +433,11 @@ function addCandidate(input: {
   if (input.seen.has(key)) return;
   input.seen.add(key);
 
-  candidatesPushSafe(input.candidates, {
+  input.candidates.push({
     title,
     price,
     url
   });
-}
-
-function candidatesPushSafe(candidates: Candidate[], candidate: Candidate) {
-  if (candidate.title.length < 3) return;
-  candidates.push(candidate);
 }
 
 async function fetchDetail(
@@ -347,13 +455,11 @@ async function fetchDetail(
 
   const price =
     parsePrice($(".price").first().text().trim()) ??
+    parsePrice($("[class*='price']").first().text().trim()) ??
     parsePrice($("meta[property='product:price:amount']").attr("content")) ??
     extractPriceFromJson(html);
 
-  return {
-    title,
-    price
-  };
+  return { title, price };
 }
 
 function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
@@ -370,42 +476,33 @@ function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
 
     const platform = normalizePlatform(item.platform);
 
-    if (platform === "plush") {
-      return hasAny(title, ["peluche", "plush"]);
-    }
-
-    if (platform === "mug") {
-      return hasAny(title, ["taza", "mug"]);
-    }
-
+    if (platform === "plush") return hasAny(title, ["peluche", "plush"]);
+    if (platform === "mug") return hasAny(title, ["taza", "mug"]);
     if (platform === "poster" || platform === "artprint") {
       return hasAny(title, ["poster", "lamina", "lámina", "print"]);
     }
-
-    if (platform === "keychain") {
-      return hasAny(title, ["llavero", "keychain"]);
-    }
-
-    if (platform === "pin") {
-      return hasAny(title, ["pin", "pins", "chapa"]);
-    }
-
+    if (platform === "keychain") return hasAny(title, ["llavero", "keychain"]);
+    if (platform === "pin") return hasAny(title, ["pin", "pins", "chapa"]);
     if (platform === "mousepad") {
-      return hasAny(title, ["alfombrilla", "mouse", "mousepad", "tapete"]);
+      return hasAny(title, ["alfombrilla", "mousepad", "tapete", "playmat"]);
     }
-
     if (platform === "apparel") {
-      return hasAny(title, ["camiseta", "sudadera", "gorra", "ropa", "shirt", "hoodie", "cap"]);
+      return hasAny(title, [
+        "camiseta",
+        "sudadera",
+        "gorra",
+        "ropa",
+        "shirt",
+        "hoodie",
+        "cap"
+      ]);
     }
 
     return true;
   });
 }
 
-function pickBestCandidate(
-  item: Item,
-  candidates: Candidate[]
-): Candidate | null {
+function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | null {
   if (candidates.length === 0) return null;
 
   const wanted = normalizeSearchText(item.name);
@@ -417,13 +514,9 @@ function pickBestCandidate(
 
     if (title.includes(wanted)) score += 0.35;
 
-    const platformBoost = getPlatformBoost(item.platform, title);
-    score += platformBoost;
+    score += getPlatformBoost(item.platform, title);
 
-    return {
-      candidate,
-      score
-    };
+    return { candidate, score };
   });
 
   scored.sort((a, b) => b.score - a.score);
@@ -453,16 +546,12 @@ function chooseFinalPrice(
     return detailPrice && detailPrice > 0 ? detailPrice : null;
   }
 
-  if (!detailPrice || detailPrice <= 0) {
-    return listingPrice;
-  }
+  if (!detailPrice || detailPrice <= 0) return listingPrice;
 
   const difference = Math.abs(detailPrice - listingPrice);
   const maxAllowedDifference = listingPrice * 0.3;
 
-  if (difference <= maxAllowedDifference) {
-    return detailPrice;
-  }
+  if (difference <= maxAllowedDifference) return detailPrice;
 
   return listingPrice;
 }
@@ -497,13 +586,7 @@ function getImportantTokens(
   normalizedText: string,
   platform: string | null
 ): string[] {
-  const stopWords = new Set([
-    "the",
-    "and",
-    "pokemon",
-    "pokémon"
-  ]);
-
+  const stopWords = new Set(["the", "and", "pokemon", "pokémon"]);
   const platformWords = getPlatformWords(platform);
 
   for (const word of platformWords) {
@@ -517,6 +600,20 @@ function getImportantTokens(
     .filter((token) => !stopWords.has(token));
 }
 
+function removePlatformWords(
+  normalizedText: string,
+  platform: string | null
+): string {
+  const platformWords = getPlatformWords(platform);
+
+  return normalizedText
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => !platformWords.includes(token))
+    .join(" ")
+    .trim();
+}
+
 function getPlatformBoost(platform: string | null, normalizedTitle: string): number {
   const type = normalizePlatform(platform);
 
@@ -525,7 +622,7 @@ function getPlatformBoost(platform: string | null, normalizedTitle: string): num
   if (type === "poster" && hasAny(normalizedTitle, ["poster"])) return 0.18;
   if (type === "keychain" && hasAny(normalizedTitle, ["llavero", "keychain"])) return 0.18;
   if (type === "pin" && hasAny(normalizedTitle, ["pin", "chapa"])) return 0.18;
-  if (type === "mousepad" && hasAny(normalizedTitle, ["alfombrilla", "mousepad", "tapete"])) return 0.18;
+  if (type === "mousepad" && hasAny(normalizedTitle, ["alfombrilla", "mousepad", "tapete", "playmat"])) return 0.18;
   if (type === "apparel" && hasAny(normalizedTitle, ["camiseta", "sudadera", "gorra", "shirt", "hoodie"])) return 0.18;
 
   return 0;
@@ -540,7 +637,7 @@ function getPlatformWords(platform: string | null): string[] {
     poster: ["poster"],
     keychain: ["keychain", "llavero"],
     pin: ["pin", "pins", "chapa"],
-    mousepad: ["mousepad", "alfombrilla", "tapete"],
+    mousepad: ["mousepad", "alfombrilla", "tapete", "playmat"],
     apparel: ["apparel", "ropa", "camiseta", "shirt"],
     artprint: ["art", "print", "lamina", "lámina"],
     acrylicstand: ["acrylic", "stand"],
@@ -553,7 +650,7 @@ function getPlatformWords(platform: string | null): string[] {
 function normalizePlatform(value: string | null): string {
   const normalized = String(value || "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
+    .replace(/[^a-z0-9áéíóúñ]+/g, "")
     .trim();
 
   if (!normalized) return "othermerch";
@@ -578,13 +675,9 @@ function hasAny(value: string, tokens: string[]): boolean {
 function titleFromProductUrl(url: string): string {
   try {
     const parsed = new URL(url);
-
     const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
 
-    return last
-      .replace(/\.html$/i, "")
-      .replace(/-/g, " ")
-      .trim();
+    return last.replace(/-/g, " ").trim();
   } catch {
     return "";
   }
@@ -595,40 +688,42 @@ function looksLikeProductUrl(url: string): boolean {
 
   if (!normalized.startsWith("http")) return false;
   if (!normalized.includes("kurogami.com")) return false;
-  if (!normalized.includes("/producto/") && !normalized.includes("/product/")) return false;
+  if (!normalized.includes("/producto/") && !normalized.includes("/product/")) {
+    return false;
+  }
   if (normalized.includes("/galeria/")) return false;
 
   return true;
 }
 
 function normalizeSearchText(value: string): string {
-  return normalizeText(value)
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeText(value).replace(/\s+/g, " ").trim();
 }
 
 function cleanQuery(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function cleanTitle(value: string): string {
-  return String(value || "")
-    .replace(/\s+/g, " ")
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function slugify(value: string): string {
+  return normalizeText(value)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
     .trim();
 }
 
 function absolutize(href: string): string {
   if (!href) return "";
-
   if (href.startsWith("http")) return href;
-
-  if (href.startsWith("/")) {
-    return `${BASE_URL}${href}`;
-  }
-
+  if (href.startsWith("/")) return `${BASE_URL}${href}`;
   return `${BASE_URL}/${href}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function computeConfidence(item: Item, matchedTitle: string): number {
@@ -637,14 +732,9 @@ function computeConfidence(item: Item, matchedTitle: string): number {
 
   let confidence = 0.48 + similarityScore(wanted, matched) * 0.42;
 
-  if (matched.includes(wanted)) {
-    confidence += 0.06;
-  }
+  if (matched.includes(wanted)) confidence += 0.06;
 
   confidence += getPlatformBoost(item.platform, matched);
 
-  return Math.max(
-    0.25,
-    Math.min(0.9, Number(confidence.toFixed(2)))
-  );
+  return Math.max(0.25, Math.min(0.9, Number(confidence.toFixed(2))));
 }
