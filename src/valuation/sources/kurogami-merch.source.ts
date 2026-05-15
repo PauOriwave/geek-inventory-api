@@ -17,6 +17,7 @@ type Candidate = {
 
 const BASE_URL = "https://kurogami.com";
 const REQUEST_TIMEOUT_MS = 10000;
+const DIRECT_PRODUCT_TIMEOUT_MS = 5000;
 
 const SUPPORTED_CATEGORIES = new Set(["merch"]);
 
@@ -53,10 +54,7 @@ export async function getKurogamiMerchPrice(
 
   for (const query of queries) {
     const resultFromDirectSlugs = await tryDirectProductSlugs(item, query);
-
-    if (resultFromDirectSlugs) {
-      return resultFromDirectSlugs;
-    }
+    if (resultFromDirectSlugs) return resultFromDirectSlugs;
 
     const urls = buildSearchUrls(item, query);
 
@@ -98,10 +96,7 @@ export async function getKurogamiMerchPrice(
       }
 
       const result = await buildResultFromCandidate(item, best, query);
-
-      if (result) {
-        return result;
-      }
+      if (result) return result;
     }
   }
 
@@ -117,7 +112,7 @@ async function tryDirectProductSlugs(
   for (const url of urls) {
     console.log("🧧 Kurogami direct product try:", url);
 
-    const detail = await fetchDetail(url);
+    const detail = await fetchDetail(url, DIRECT_PRODUCT_TIMEOUT_MS);
 
     if (!detail?.title || !detail.price || detail.price <= 0) {
       continue;
@@ -142,7 +137,6 @@ async function tryDirectProductSlugs(
     }
 
     const result = await buildResultFromCandidate(item, candidate, query);
-
     if (result) return result;
   }
 
@@ -166,9 +160,15 @@ function buildDirectProductUrls(item: Item, query: string): string[] {
       urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-pokemon`);
       urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-20-cms-pokemon`);
       urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-20-cm-pokemon`);
-      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-version-3-pokemon-20-cm`);
-      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-pokemon-squishmallows-50-cm`);
-      urls.add(`${BASE_URL}/es/producto/peluche-${slugBase}-sonriente-pokemon-32-cm`);
+      urls.add(
+        `${BASE_URL}/es/producto/peluche-${slugBase}-version-3-pokemon-20-cm`
+      );
+      urls.add(
+        `${BASE_URL}/es/producto/peluche-${slugBase}-pokemon-squishmallows-50-cm`
+      );
+      urls.add(
+        `${BASE_URL}/es/producto/peluche-${slugBase}-sonriente-pokemon-32-cm`
+      );
     }
 
     if (platform === "mug") {
@@ -262,28 +262,43 @@ function buildSearchQueries(item: Item): string[] {
   if (platform === "plush") {
     queries.add(raw.replace(/\bplush figure\b/gi, "peluche"));
     queries.add(raw.replace(/\bplush\b/gi, "peluche"));
-    queries.add(toSpanishTypeFirst(raw, ["plush", "plush figure"], "Peluche"));
+
+    if (!normalized.includes("peluche")) {
+      queries.add(toSpanishTypeFirst(raw, ["plush", "plush figure"], "Peluche"));
+    }
   }
 
   if (platform === "mug") {
     queries.add(raw.replace(/\bmug\b/gi, "taza"));
-    queries.add(toSpanishTypeFirst(raw, ["mug"], "Taza"));
+
+    if (!normalized.includes("taza")) {
+      queries.add(toSpanishTypeFirst(raw, ["mug"], "Taza"));
+    }
   }
 
   if (platform === "keychain") {
     queries.add(raw.replace(/\bkeychain\b/gi, "llavero"));
-    queries.add(toSpanishTypeFirst(raw, ["keychain"], "Llavero"));
+
+    if (!normalized.includes("llavero")) {
+      queries.add(toSpanishTypeFirst(raw, ["keychain"], "Llavero"));
+    }
   }
 
   if (platform === "mousepad") {
     queries.add(raw.replace(/\bmousepad\b/gi, "alfombrilla"));
-    queries.add(toSpanishTypeFirst(raw, ["mousepad"], "Alfombrilla"));
+
+    if (!normalized.includes("alfombrilla") && !normalized.includes("tapete")) {
+      queries.add(toSpanishTypeFirst(raw, ["mousepad"], "Alfombrilla"));
+    }
   }
 
   if (platform === "poster" || platform === "artprint") {
     queries.add(raw.replace(/\bart print\b/gi, "poster"));
     queries.add(raw.replace(/\bprint\b/gi, "poster"));
-    queries.add(toSpanishTypeFirst(raw, ["art print", "print"], "Poster"));
+
+    if (!normalized.includes("poster")) {
+      queries.add(toSpanishTypeFirst(raw, ["art print", "print"], "Poster"));
+    }
   }
 
   if (platform === "apparel") {
@@ -342,9 +357,12 @@ function buildSearchUrls(item: Item, query: string): string[] {
   return [...urls];
 }
 
-async function fetchHtml(url: string): Promise<string | null> {
+async function fetchHtml(
+  url: string,
+  timeoutMs = REQUEST_TIMEOUT_MS
+): Promise<string | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(url, {
@@ -441,9 +459,10 @@ function addCandidate(input: {
 }
 
 async function fetchDetail(
-  url: string
+  url: string,
+  timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<{ title: string | null; price: number | null } | null> {
-  const html = await fetchHtml(url);
+  const html = await fetchHtml(url, timeoutMs);
   if (!html) return null;
 
   const $ = cheerio.load(html);
