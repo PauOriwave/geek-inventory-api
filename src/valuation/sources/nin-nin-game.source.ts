@@ -15,7 +15,7 @@ type Candidate = {
   url: string;
 };
 
-const BASE_URL = "https://store.nin-nin-game.com";
+const BASE_URL = "https://www.nin-nin-game.com";
 const REQUEST_TIMEOUT_MS = 10000;
 const DIRECT_PRODUCT_TIMEOUT_MS = 5000;
 
@@ -39,7 +39,7 @@ export async function getNinNinGamePrice(
 
   if (
     item.category === "merch" &&
-    !["acrylicstand", "artprint", "apparel", "othermerch"].includes(platform)
+    !["acrylicstand", "figure", "othermerch"].includes(platform)
   ) {
     return null;
   }
@@ -54,6 +54,8 @@ export async function getNinNinGamePrice(
 
       const html = await fetchHtml(searchUrl);
       if (!html) continue;
+
+      console.log("🎌 NinNinGame html length:", html.length);
 
       const candidates = extractCandidates(html);
 
@@ -85,7 +87,6 @@ export async function getNinNinGamePrice(
       }
 
       const result = await buildResult(item, best, query);
-
       if (result) return result;
     }
   }
@@ -97,73 +98,63 @@ function buildSearchUrls(query: string): string[] {
   const encoded = encodeURIComponent(query);
 
   return [
-    `${BASE_URL}/en/search?controller=search&s=${encoded}`,
-    `${BASE_URL}/en/search?search_query=${encoded}`
+    `${BASE_URL}/en/search?search_query=${encoded}`,
+    `${BASE_URL}/en/search?s=${encoded}`
   ];
 }
 
 function buildQueries(item: Item): string[] {
   const raw = clean(item.name);
   const normalized = normalizeSearchText(raw);
-  const platform = normalizePlatform(item.platform);
 
   const queries = new Set<string>();
 
   queries.add(raw);
 
-  const withoutTypeWords = removeTypeWords(normalized);
-
-  if (withoutTypeWords) {
-    queries.add(withoutTypeWords);
+  if (normalized.includes("acrylic")) {
+    queries.add(raw.replace(/acrylic/gi, ""));
   }
 
-  if (platform === "acrylicstand") {
-    queries.add(`${withoutTypeWords || raw} acrylic stand`);
-    queries.add(`${withoutTypeWords || raw} acrylic`);
-    queries.add(`${withoutTypeWords || raw} stand`);
-    queries.add(`${withoutTypeWords || raw} acryl`);
+  if (normalized.includes("stand")) {
+    queries.add(raw.replace(/stand/gi, ""));
   }
 
-  if (platform === "artprint") {
-    queries.add(`${withoutTypeWords || raw} art print`);
-    queries.add(`${withoutTypeWords || raw} print`);
-    queries.add(`${withoutTypeWords || raw} poster`);
+  if (normalized.includes("acrílico") || normalized.includes("acrilico")) {
+    queries.add(raw.replace(/acr[ií]lico/gi, ""));
   }
 
-  if (platform === "apparel") {
-    queries.add(`${withoutTypeWords || raw} t-shirt`);
-    queries.add(`${withoutTypeWords || raw} shirt`);
-    queries.add(`${withoutTypeWords || raw} apparel`);
-  }
+  queries.add(`${raw} acrylic stand`);
+  queries.add(`${raw} acryl`);
+  queries.add(`${raw} figure`);
 
   const tokens = normalized.split(" ").filter(Boolean);
 
   if (tokens.length >= 2) {
-    queries.add(tokens.slice(0, 3).join(" "));
     queries.add(tokens.slice(0, 2).join(" "));
+  }
+
+  if (tokens.length >= 3) {
+    queries.add(tokens.slice(0, 3).join(" "));
   }
 
   return [...queries]
     .map((query) => query.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
-    .slice(0, 10);
+    .slice(0, 8);
 }
 
 function extractCandidates(html: string): Candidate[] {
   const $ = cheerio.load(html);
-
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
 
-  $("article, .product-miniature, .js-product-miniature, .product-container, li, div").each(
+  $("article, .product-miniature, .js-product-miniature, .product-container").each(
     (_, el) => {
       const root = $(el);
 
       const href =
-        root.find("a[href]").first().attr("href") ||
-        root.find("a").first().attr("href") ||
-        "";
+        root.find("a[href]").first().attr("href") || "";
 
       const url = absolutize(href);
 
@@ -174,8 +165,7 @@ function extractCandidates(html: string): Candidate[] {
         root.find("h2, h3").first().text().trim() ||
         root.find("a[title]").first().attr("title")?.trim() ||
         root.find("img[alt]").first().attr("alt")?.trim() ||
-        root.find("a").first().text().trim() ||
-        titleFromUrl(url);
+        titleFromProductUrl(url);
 
       const priceText =
         root.find(".price").first().text().trim() ||
@@ -205,8 +195,8 @@ function extractCandidates(html: string): Candidate[] {
       link.attr("title")?.trim() ||
       link.text().trim() ||
       link.find("img").attr("alt")?.trim() ||
-      root.find("h2, h3, .product-title").first().text().trim() ||
-      titleFromUrl(url);
+      root.find("h2,h3,.product-title").first().text().trim() ||
+      titleFromProductUrl(url);
 
     const priceText =
       root.find(".price").first().text().trim() ||
@@ -263,37 +253,7 @@ function filterCandidates(
   return candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
 
-    const hasCoreTokens = tokens.every((token) => title.includes(token));
-    if (!hasCoreTokens) return false;
-
-    const platform = normalizePlatform(item.platform);
-
-    if (platform === "acrylicstand") {
-      return hasAny(title, [
-        "acrylic",
-        "acryl",
-        "stand",
-        "acrilico",
-        "acrilica"
-      ]);
-    }
-
-    if (platform === "artprint") {
-      return hasAny(title, ["print", "poster", "art"]);
-    }
-
-    if (platform === "apparel") {
-      return hasAny(title, [
-        "shirt",
-        "t-shirt",
-        "hoodie",
-        "apparel",
-        "camiseta",
-        "sudadera"
-      ]);
-    }
-
-    return true;
+    return tokens.every((token) => title.includes(token));
   });
 }
 
@@ -316,7 +276,13 @@ function pickBestCandidate(
       score += 0.25;
     }
 
-    score += getPlatformBoost(item.platform, title);
+    if (
+      title.includes("acrylic") ||
+      title.includes("acryl") ||
+      title.includes("stand")
+    ) {
+      score += 0.12;
+    }
 
     return {
       candidate,
@@ -338,7 +304,7 @@ function pickBestCandidate(
 
   const best = scored[0];
 
-  if (!best || best.score < 0.5) {
+  if (!best || best.score < 0.45) {
     return null;
   }
 
@@ -352,17 +318,17 @@ async function buildResult(
 ): Promise<ScraperSourceResult | null> {
   const detail = await fetchDetail(candidate.url);
 
-  const finalPrice = chooseFinalPrice(
-    candidate.price,
-    detail?.price ?? null
-  );
+  const finalPrice =
+    detail?.price && detail.price > 0
+      ? detail.price
+      : candidate.price;
 
   if (!finalPrice || finalPrice <= 0) {
     console.log("🎌 NinNinGame matched but no usable price:", {
       title: candidate.title,
+      url: candidate.url,
       listingPrice: candidate.price,
-      detailPrice: detail?.price,
-      url: candidate.url
+      detailPrice: detail?.price
     });
 
     return null;
@@ -418,7 +384,7 @@ async function fetchDetail(
     $("h1").first().text().trim() ||
     $("meta[property='og:title']").attr("content")?.trim() ||
     $("title").text().trim() ||
-    titleFromUrl(url);
+    titleFromProductUrl(url);
 
   const price =
     parsePrice($(".price").first().text().trim()) ??
@@ -480,35 +446,6 @@ async function fetchHtml(
   }
 }
 
-function chooseFinalPrice(
-  listingPrice: number | null,
-  detailPrice: number | null
-): number | null {
-  if (listingPrice == null || listingPrice <= 0) {
-    return detailPrice && detailPrice > 0 ? detailPrice : null;
-  }
-
-  if (!detailPrice || detailPrice <= 0) {
-    return listingPrice;
-  }
-
-  const difference = Math.abs(detailPrice - listingPrice);
-  const maxAllowedDifference = listingPrice * 0.35;
-
-  if (difference <= maxAllowedDifference) {
-    return detailPrice;
-  }
-
-  console.log("🎌 NinNinGame price mismatch, keeping listing price:", {
-    listingPrice,
-    detailPrice,
-    difference,
-    maxAllowedDifference
-  });
-
-  return listingPrice;
-}
-
 function parsePrice(
   value: string | null | undefined
 ): number | null {
@@ -517,8 +454,8 @@ function parsePrice(
   if (!text) return null;
 
   const euro =
-    text.match(/€\s?(\d{1,5}(?:[.,]\d{2})?)/i) ||
-    text.match(/(\d{1,5}(?:[.,]\d{2})?)\s?€/i);
+    text.match(/€\s?(\d{1,5}(?:[.,]\d{1,2})?)/i) ||
+    text.match(/(\d{1,5}(?:[.,]\d{1,2})?)\s?€/i);
 
   if (euro?.[1]) {
     return parseEuroPrice(euro[1]);
@@ -546,41 +483,21 @@ function extractPriceFromJson(
 function normalizePlatform(
   value: string | null
 ): string {
-  const normalized = normalizeText(value || "")
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-
-  if (!normalized) return "othermerch";
+  const normalized = normalizeText(value || "");
 
   if (
     normalized.includes("acrylic") ||
     normalized.includes("acrilico") ||
-    normalized.includes("acrilica") ||
-    normalized.includes("acrylicstand") ||
-    normalized.includes("standacrilico")
+    normalized.includes("acrílico") ||
+    normalized.includes("stand")
   ) {
     return "acrylicstand";
   }
 
   if (
-    normalized.includes("artprint") ||
-    normalized.includes("print") ||
-    normalized.includes("poster")
+    normalized.includes("figure") ||
+    normalized.includes("figura")
   ) {
-    return "artprint";
-  }
-
-  if (
-    normalized.includes("apparel") ||
-    normalized.includes("ropa") ||
-    normalized.includes("shirt") ||
-    normalized.includes("camiseta") ||
-    normalized.includes("hoodie")
-  ) {
-    return "apparel";
-  }
-
-  if (normalized.includes("figure") || normalized.includes("figura")) {
     return "figure";
   }
 
@@ -598,141 +515,28 @@ function normalizeSearchText(
 function getImportantTokens(
   value: string
 ): string[] {
-  const stopWords = new Set([
-    "stand",
-    "acrylic",
-    "acrilico",
-    "acrilica",
-    "figure",
-    "figura",
-    "art",
-    "print",
-    "poster",
-    "shirt",
-    "camiseta",
-    "apparel",
-    "ropa",
-    "merch"
-  ]);
-
   return value
     .split(" ")
     .filter(Boolean)
     .filter((token) => token.length > 2)
-    .filter((token) => !stopWords.has(token));
-}
-
-function removeTypeWords(
-  value: string
-): string {
-  return value
-    .split(" ")
-    .filter(Boolean)
     .filter(
       (token) =>
         ![
           "stand",
           "acrylic",
           "acrilico",
-          "acrilica",
+          "acrílico",
           "figure",
           "figura",
-          "art",
-          "print",
-          "poster",
-          "shirt",
-          "camiseta",
-          "apparel",
-          "ropa",
           "merch"
         ].includes(token)
-    )
-    .join(" ")
-    .trim();
-}
-
-function getPlatformBoost(
-  platform: string | null,
-  normalizedTitle: string
-): number {
-  const type = normalizePlatform(platform);
-
-  if (
-    type === "acrylicstand" &&
-    hasAny(normalizedTitle, [
-      "acrylic",
-      "acryl",
-      "stand",
-      "acrilico",
-      "acrilica"
-    ])
-  ) {
-    return 0.18;
-  }
-
-  if (
-    type === "artprint" &&
-    hasAny(normalizedTitle, ["print", "poster", "art"])
-  ) {
-    return 0.16;
-  }
-
-  if (
-    type === "apparel" &&
-    hasAny(normalizedTitle, [
-      "shirt",
-      "t-shirt",
-      "hoodie",
-      "apparel",
-      "camiseta",
-      "sudadera"
-    ])
-  ) {
-    return 0.16;
-  }
-
-  return 0;
-}
-
-function hasAny(value: string, tokens: string[]): boolean {
-  return tokens.some((token) => value.includes(token));
+    );
 }
 
 function clean(value: string): string {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function titleFromUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
-
-    return last
-      .replace(/\.html?$/i, "")
-      .replace(/^\d+-/, "")
-      .replace(/-\d+$/, "")
-      .replace(/-/g, " ")
-      .trim();
-  } catch {
-    return "";
-  }
-}
-
-function looksLikeProductUrl(url: string): boolean {
-  const normalized = url.toLowerCase();
-
-  if (!normalized.startsWith("http")) return false;
-  if (!normalized.includes("store.nin-nin-game.com")) return false;
-  if (!normalized.includes("/en/")) return false;
-  if (normalized.includes("/search")) return false;
-  if (normalized.includes("/cart")) return false;
-  if (normalized.includes("/login")) return false;
-  if (normalized.includes("/order")) return false;
-  if (normalized.includes("#")) return false;
-
-  return true;
 }
 
 function absolutize(href: string): string {
@@ -749,17 +553,44 @@ function absolutize(href: string): string {
   return `${BASE_URL}/${href}`;
 }
 
+function titleFromProductUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
+
+    return decodeURIComponent(last)
+      .replace(/\.html$/i, "")
+      .replace(/^\d+-/, "")
+      .replace(/-/g, " ")
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+function looksLikeProductUrl(url: string): boolean {
+  const normalized = url.toLowerCase();
+
+  if (!normalized.startsWith("http")) return false;
+  if (!normalized.includes("nin-nin-game.com")) return false;
+  if (normalized.includes("/search")) return false;
+  if (normalized.includes("/cart")) return false;
+  if (normalized.includes("/login")) return false;
+  if (normalized.includes("/order")) return false;
+  if (normalized.includes("/module/")) return false;
+
+  return (
+    normalized.includes("/en/") &&
+    normalized.endsWith(".html")
+  );
+}
+
 function computeConfidence(
   item: Item,
   matchedTitle: string
 ): number {
-  const wanted = normalizeSearchText(
-    item.name
-  );
-
-  const matched = normalizeSearchText(
-    matchedTitle
-  );
+  const wanted = normalizeSearchText(item.name);
+  const matched = normalizeSearchText(matchedTitle);
 
   let confidence =
     0.45 +
@@ -769,7 +600,13 @@ function computeConfidence(
     confidence += 0.08;
   }
 
-  confidence += getPlatformBoost(item.platform, matched);
+  if (
+    matched.includes("acrylic") ||
+    matched.includes("acryl") ||
+    matched.includes("stand")
+  ) {
+    confidence += 0.05;
+  }
 
   return Math.max(
     0.3,
