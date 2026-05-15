@@ -43,12 +43,12 @@ type SourceDefinition = {
 };
 
 const MIN_CONFIDENCE_FOR_VALUATION = 0.5;
-const HIGH_CONFIDENCE_THRESHOLD = 0.88;
-
 const TCG_DUNGEON_MARVELS_MIN_CONFIDENCE = 0.8;
-
 const MERCH_MIN_CONFIDENCE = 0.65;
 const DUNGEON_MARVELS_MERCH_MIN_CONFIDENCE = 0.6;
+const NIN_NIN_GAME_MERCH_MIN_CONFIDENCE = 0.55;
+
+const CACHE_TTL_HOURS = 24;
 
 const sources: SourceDefinition[] = [
   {
@@ -181,8 +181,6 @@ const sources: SourceDefinition[] = [
   }
 ];
 
-const CACHE_TTL_HOURS = 24;
-
 function getSourcesForItem(item: Item): SourceDefinition[] {
   const categorySources = sources.filter((source) =>
     source.categories.includes(item.category)
@@ -203,11 +201,9 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
     }
 
     return categorySources.filter((source) =>
-      [
-        "dungeon_marvels",
-        "goblin_trader",
-        "nin_nin_game"
-      ].includes(source.name)
+      ["dungeon_marvels", "goblin_trader", "nin_nin_game"].includes(
+        source.name
+      )
     );
   }
 
@@ -215,9 +211,9 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
     return categorySources.filter((source) =>
       [
         "kurogami_merch",
+        "nin_nin_game",
         "dungeon_marvels",
-        "goblin_trader",
-        "nin_nin_game"
+        "goblin_trader"
       ].includes(source.name)
     );
   }
@@ -259,17 +255,11 @@ function normalizePlatform(value: string | null): string | null {
     return "funko_pop";
   }
 
-  if (
-    normalized === "pokemon" ||
-    normalized === "pokemontcg"
-  ) {
+  if (normalized === "pokemon" || normalized === "pokemontcg") {
     return "pokemon";
   }
 
-  if (
-    normalized === "magic" ||
-    normalized === "mtg"
-  ) {
+  if (normalized === "magic" || normalized === "mtg") {
     return "magic";
   }
 
@@ -313,6 +303,10 @@ function getMinimumConfidenceForResult(
     return DUNGEON_MARVELS_MERCH_MIN_CONFIDENCE;
   }
 
+  if (item.category === "merch" && result.source === "nin_nin_game") {
+    return NIN_NIN_GAME_MERCH_MIN_CONFIDENCE;
+  }
+
   if (item.category === "merch") {
     return MERCH_MIN_CONFIDENCE;
   }
@@ -320,10 +314,7 @@ function getMinimumConfidenceForResult(
   return MIN_CONFIDENCE_FOR_VALUATION;
 }
 
-async function logScraperAttempts(
-  item: Item,
-  attempts: ScraperAttemptLog[]
-) {
+async function logScraperAttempts(item: Item, attempts: ScraperAttemptLog[]) {
   if (attempts.length === 0) return;
 
   await prisma.scraperRunLog.createMany({
@@ -351,10 +342,7 @@ function toPrismaJson(value: unknown): Prisma.InputJsonValue {
   ) as Prisma.InputJsonValue;
 }
 
-async function saveSourceMarketData(
-  item: Item,
-  results: ScraperSourceResult[]
-) {
+async function saveSourceMarketData(item: Item, results: ScraperSourceResult[]) {
   const enrichedResults = results.filter(
     (result) => result.metadata && Object.keys(result.metadata).length > 0
   );
@@ -416,10 +404,8 @@ function calculateWeightedValuation(
   ].join("+");
 
   const avgConfidence =
-    weightedResults.reduce(
-      (acc, entry) => acc + entry.result.confidence,
-      0
-    ) / weightedResults.length;
+    weightedResults.reduce((acc, entry) => acc + entry.result.confidence, 0) /
+    weightedResults.length;
 
   const currency = weightedResults[0]?.result.currency ?? null;
 
@@ -439,6 +425,8 @@ async function scrapeValuation(item: Item): Promise<{
 }> {
   const defaultQuery = buildSourceQuery(item);
   const activeSources = getSourcesForItem(item);
+
+  console.log("[valuation] all registered sources:", sources.map((s) => s.name));
 
   console.log("[valuation] item:", {
     id: item.id,
@@ -509,10 +497,7 @@ async function scrapeValuation(item: Item): Promise<{
         confidence: result.confidence
       });
 
-      const requiredConfidence = getMinimumConfidenceForResult(
-        item,
-        result
-      );
+      const requiredConfidence = getMinimumConfidenceForResult(item, result);
 
       if (result.confidence < requiredConfidence) {
         console.log("[valuation] Ignoring low confidence result:", {
@@ -574,6 +559,7 @@ export async function getValuation(
   });
 
   if (!cache) return null;
+
   if (!allowStale && !isCacheValid(cache.updatedAt)) {
     return null;
   }
@@ -659,9 +645,7 @@ export async function refreshValuation(
   return valuation;
 }
 
-export async function needsValuationRefresh(
-  item: Item
-): Promise<boolean> {
+export async function needsValuationRefresh(item: Item): Promise<boolean> {
   const cache = await prisma.priceCache.findUnique({
     where: {
       key: buildCacheKey(item)
