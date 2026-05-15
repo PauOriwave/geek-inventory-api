@@ -265,7 +265,10 @@ function filterCandidates(
   return candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
 
-    const hasCoreTokens = tokens.every((token) => title.includes(token));
+    const hasCoreTokens = tokens.every((token) =>
+      title.includes(token)
+    );
+
     if (!hasCoreTokens) return false;
 
     if (item.category !== "merch") return true;
@@ -274,7 +277,10 @@ function filterCandidates(
   });
 }
 
-function matchesMerchPlatform(item: Item, normalizedTitle: string): boolean {
+function matchesMerchPlatform(
+  item: Item,
+  normalizedTitle: string
+): boolean {
   const platform = normalizePlatform(item.platform);
 
   if (platform === "poster") {
@@ -289,19 +295,32 @@ function matchesMerchPlatform(item: Item, normalizedTitle: string): boolean {
   }
 
   if (platform === "keychain") {
-    return hasAny(normalizedTitle, ["llavero", "keychain"]);
+    return hasAny(normalizedTitle, [
+      "llavero",
+      "keychain"
+    ]);
   }
 
   if (platform === "mug") {
-    return hasAny(normalizedTitle, ["taza", "mug"]);
+    return hasAny(normalizedTitle, [
+      "taza",
+      "mug"
+    ]);
   }
 
   if (platform === "plush") {
-    return hasAny(normalizedTitle, ["peluche", "plush"]);
+    return hasAny(normalizedTitle, [
+      "peluche",
+      "plush"
+    ]);
   }
 
   if (platform === "pin") {
-    return hasAny(normalizedTitle, ["pin", "pins", "chapa"]);
+    return hasAny(normalizedTitle, [
+      "pin",
+      "pins",
+      "chapa"
+    ]);
   }
 
   if (platform === "mousepad") {
@@ -331,17 +350,7 @@ function matchesMerchPlatform(item: Item, normalizedTitle: string): boolean {
       "póster",
       "lamina",
       "lámina",
-      "print",
-      "cuadro"
-    ]);
-  }
-
-  if (platform === "acrylicstand") {
-    return hasAny(normalizedTitle, [
-      "acrilico",
-      "acrílico",
-      "acrylic",
-      "stand"
+      "print"
     ]);
   }
 
@@ -391,7 +400,8 @@ function pickBestCandidate(
 
   const best = scored[0];
 
-  const minimumScore = item.category === "merch" ? 0.5 : 0.45;
+  const minimumScore =
+    item.category === "merch" ? 0.38 : 0.45;
 
   if (!best || best.score < minimumScore) {
     return null;
@@ -400,34 +410,58 @@ function pickBestCandidate(
   return best.candidate;
 }
 
-function getMerchPlatformBoost(item: Item, normalizedTitle: string): number {
+function getMerchPlatformBoost(
+  item: Item,
+  normalizedTitle: string
+): number {
   const platform = normalizePlatform(item.platform);
 
-  if (platform === "poster" && matchesMerchPlatform(item, normalizedTitle)) {
+  if (
+    platform === "poster" &&
+    matchesMerchPlatform(item, normalizedTitle)
+  ) {
     return 0.22;
   }
 
-  if (platform === "keychain" && matchesMerchPlatform(item, normalizedTitle)) {
+  if (
+    platform === "keychain" &&
+    matchesMerchPlatform(item, normalizedTitle)
+  ) {
     return 0.18;
   }
 
-  if (platform === "mug" && matchesMerchPlatform(item, normalizedTitle)) {
+  if (
+    platform === "mug" &&
+    matchesMerchPlatform(item, normalizedTitle)
+  ) {
     return 0.18;
   }
 
-  if (platform === "plush" && matchesMerchPlatform(item, normalizedTitle)) {
+  if (
+    platform === "plush" &&
+    matchesMerchPlatform(item, normalizedTitle)
+  ) {
     return 0.18;
   }
 
-  if (platform === "pin" && matchesMerchPlatform(item, normalizedTitle)) {
+  if (
+    platform === "pin" &&
+    matchesMerchPlatform(item, normalizedTitle)
+  ) {
     return 0.18;
   }
 
-  if (platform === "mousepad" && matchesMerchPlatform(item, normalizedTitle)) {
+  if (
+    platform === "mousepad" &&
+    matchesMerchPlatform(item, normalizedTitle)
+  ) {
     return 0.18;
   }
 
-  if (platform === "apparel" && matchesMerchPlatform(item, normalizedTitle)) {
+  if (
+    platform === "apparel" &&
+    matchesMerchPlatform(item, normalizedTitle)
+  ) {
     return 0.18;
   }
 
@@ -439,36 +473,49 @@ function chooseFinalPrice(
   detailPrice: number | null
 ): number | null {
   if (listingPrice == null || listingPrice <= 0) {
-    return detailPrice && detailPrice > 0 ? detailPrice : null;
+    return detailPrice && detailPrice > 0
+      ? detailPrice
+      : null;
   }
 
   if (!detailPrice || detailPrice <= 0) {
     return listingPrice;
   }
 
-  const difference = Math.abs(detailPrice - listingPrice);
-  const maxAllowedDifference = listingPrice * 0.25;
+  const difference = Math.abs(
+    detailPrice - listingPrice
+  );
+
+  const maxAllowedDifference =
+    listingPrice * 0.25;
 
   if (difference <= maxAllowedDifference) {
     return detailPrice;
   }
 
-  console.log("🎲 DM price mismatch, keeping listing price:", {
-    listingPrice,
-    detailPrice,
-    difference,
-    maxAllowedDifference
-  });
+  console.log(
+    "🎲 DM price mismatch, keeping listing price:",
+    {
+      listingPrice,
+      detailPrice,
+      difference,
+      maxAllowedDifference
+    }
+  );
 
   return listingPrice;
 }
 
-function parsePrice(text: string | null | undefined): number | null {
+function parsePrice(
+  text: string | null | undefined
+): number | null {
   const value = String(text || "").trim();
 
   if (!value) return null;
 
-  const numeric = Number(value.replace(",", "."));
+  const numeric = Number(
+    value.replace(",", ".")
+  );
 
   if (Number.isFinite(numeric) && numeric > 0) {
     return numeric;
@@ -477,14 +524,23 @@ function parsePrice(text: string | null | undefined): number | null {
   return parseEuroPrice(value);
 }
 
-function extractPriceFromJson(html: string): number | null {
+function extractPriceFromJson(
+  html: string
+): number | null {
   const matches = [
-    ...html.matchAll(/"price"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g)
+    ...html.matchAll(
+      /"price"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g
+    )
   ];
 
   const prices = matches
-    .map((match) => Number(String(match[1]).replace(",", ".")))
-    .filter((price) => Number.isFinite(price) && price > 0);
+    .map((match) =>
+      Number(String(match[1]).replace(",", "."))
+    )
+    .filter(
+      (price) =>
+        Number.isFinite(price) && price > 0
+    );
 
   return prices[0] ?? null;
 }
@@ -494,7 +550,10 @@ function titleFromProductUrl(url: string): string {
     const parsed = new URL(url);
 
     const last =
-      parsed.pathname.split("/").filter(Boolean).pop() || "";
+      parsed.pathname
+        .split("/")
+        .filter(Boolean)
+        .pop() || "";
 
     return last
       .replace(/\.html$/i, "")
@@ -538,7 +597,9 @@ function getImportantTokens(
       "stand",
       "mousepad",
       "merch"
-    ].forEach((word) => stopWords.add(word));
+    ].forEach((word) =>
+      stopWords.add(word)
+    );
   }
 
   return normalizedText
@@ -548,7 +609,9 @@ function getImportantTokens(
     .filter((token) => !stopWords.has(token));
 }
 
-function normalizePlatform(value: string | null): string {
+function normalizePlatform(
+  value: string | null
+): string {
   const normalized = String(value || "")
     .toLowerCase()
     .replace(/[^a-z0-9áéíóúñ]+/g, "")
@@ -556,29 +619,66 @@ function normalizePlatform(value: string | null): string {
 
   if (!normalized) return "othermerch";
 
-  if (normalized.includes("poster")) return "poster";
-  if (normalized.includes("keychain") || normalized.includes("llavero")) {
+  if (normalized.includes("poster")) {
+    return "poster";
+  }
+
+  if (
+    normalized.includes("keychain") ||
+    normalized.includes("llavero")
+  ) {
     return "keychain";
   }
-  if (normalized.includes("mug") || normalized.includes("taza")) return "mug";
-  if (normalized.includes("plush") || normalized.includes("peluche")) {
+
+  if (
+    normalized.includes("mug") ||
+    normalized.includes("taza")
+  ) {
+    return "mug";
+  }
+
+  if (
+    normalized.includes("plush") ||
+    normalized.includes("peluche")
+  ) {
     return "plush";
   }
-  if (normalized.includes("pin") || normalized.includes("chapa")) return "pin";
-  if (normalized.includes("mousepad") || normalized.includes("alfombrilla")) {
+
+  if (
+    normalized.includes("pin") ||
+    normalized.includes("chapa")
+  ) {
+    return "pin";
+  }
+
+  if (
+    normalized.includes("mousepad") ||
+    normalized.includes("alfombrilla")
+  ) {
     return "mousepad";
   }
-  if (normalized.includes("apparel") || normalized.includes("ropa")) {
+
+  if (
+    normalized.includes("apparel") ||
+    normalized.includes("ropa")
+  ) {
     return "apparel";
   }
-  if (normalized.includes("artprint")) return "artprint";
-  if (normalized.includes("acrylicstand")) return "acrylicstand";
+
+  if (normalized.includes("artprint")) {
+    return "artprint";
+  }
 
   return "othermerch";
 }
 
-function hasAny(value: string, tokens: string[]): boolean {
-  return tokens.some((token) => value.includes(token));
+function hasAny(
+  value: string,
+  tokens: string[]
+): boolean {
+  return tokens.some((token) =>
+    value.includes(token)
+  );
 }
 
 function normalizeSearchText(value: string): string {
@@ -603,8 +703,12 @@ function looksLikeProductUrl(url: string): boolean {
   const normalized = url.toLowerCase();
 
   if (!normalized.startsWith("http")) return false;
-  if (!normalized.includes("dungeonmarvels.com")) return false;
-  if (!normalized.endsWith(".html")) return false;
+  if (!normalized.includes("dungeonmarvels.com")) {
+    return false;
+  }
+  if (!normalized.endsWith(".html")) {
+    return false;
+  }
 
   return true;
 }
@@ -631,20 +735,26 @@ function computeConfidence(
   const matched = normalizeSearchText(matchedTitle);
 
   let confidence =
-    0.45 + similarityScore(wanted, matched) * 0.45;
+    0.45 +
+    similarityScore(wanted, matched) * 0.45;
 
   if (matched.includes(wanted)) {
     confidence += 0.05;
   }
 
   if (item.category === "merch") {
-    confidence += getMerchPlatformBoost(item, matched) * 0.5;
+    confidence +=
+      getMerchPlatformBoost(item, matched) * 0.5;
   }
 
-  const cap = item.category === "merch" ? 0.88 : 0.92;
+  const cap =
+    item.category === "merch" ? 0.88 : 0.92;
 
   return Math.max(
     0.2,
-    Math.min(cap, Number(confidence.toFixed(2)))
+    Math.min(
+      cap,
+      Number(confidence.toFixed(2))
+    )
   );
 }
