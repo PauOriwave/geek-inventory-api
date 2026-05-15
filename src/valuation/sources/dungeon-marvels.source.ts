@@ -265,8 +265,87 @@ function filterCandidates(
   return candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
 
-    return tokens.every((token) => title.includes(token));
+    const hasCoreTokens = tokens.every((token) => title.includes(token));
+    if (!hasCoreTokens) return false;
+
+    if (item.category !== "merch") return true;
+
+    return matchesMerchPlatform(item, title);
   });
+}
+
+function matchesMerchPlatform(item: Item, normalizedTitle: string): boolean {
+  const platform = normalizePlatform(item.platform);
+
+  if (platform === "poster") {
+    return hasAny(normalizedTitle, [
+      "poster",
+      "póster",
+      "lamina",
+      "lámina",
+      "cuadro",
+      "vidrio"
+    ]);
+  }
+
+  if (platform === "keychain") {
+    return hasAny(normalizedTitle, ["llavero", "keychain"]);
+  }
+
+  if (platform === "mug") {
+    return hasAny(normalizedTitle, ["taza", "mug"]);
+  }
+
+  if (platform === "plush") {
+    return hasAny(normalizedTitle, ["peluche", "plush"]);
+  }
+
+  if (platform === "pin") {
+    return hasAny(normalizedTitle, ["pin", "pins", "chapa"]);
+  }
+
+  if (platform === "mousepad") {
+    return hasAny(normalizedTitle, [
+      "alfombrilla",
+      "mousepad",
+      "tapete",
+      "playmat"
+    ]);
+  }
+
+  if (platform === "apparel") {
+    return hasAny(normalizedTitle, [
+      "camiseta",
+      "sudadera",
+      "gorra",
+      "ropa",
+      "shirt",
+      "hoodie",
+      "cap"
+    ]);
+  }
+
+  if (platform === "artprint") {
+    return hasAny(normalizedTitle, [
+      "poster",
+      "póster",
+      "lamina",
+      "lámina",
+      "print",
+      "cuadro"
+    ]);
+  }
+
+  if (platform === "acrylicstand") {
+    return hasAny(normalizedTitle, [
+      "acrilico",
+      "acrílico",
+      "acrylic",
+      "stand"
+    ]);
+  }
+
+  return true;
 }
 
 function pickBestCandidate(
@@ -288,6 +367,10 @@ function pickBestCandidate(
       score += 0.3;
     }
 
+    if (item.category === "merch") {
+      score += getMerchPlatformBoost(item, title);
+    }
+
     return {
       candidate,
       score
@@ -296,15 +379,59 @@ function pickBestCandidate(
 
   scored.sort((a, b) => b.score - a.score);
 
+  console.log(
+    "🎲 DM top candidates:",
+    scored.slice(0, 5).map((entry) => ({
+      title: entry.candidate.title,
+      price: entry.candidate.price,
+      score: Number(entry.score.toFixed(2)),
+      url: entry.candidate.url
+    }))
+  );
+
   const best = scored[0];
 
-  const minimumScore = item.category === "merch" ? 0.55 : 0.45;
+  const minimumScore = item.category === "merch" ? 0.5 : 0.45;
 
   if (!best || best.score < minimumScore) {
     return null;
   }
 
   return best.candidate;
+}
+
+function getMerchPlatformBoost(item: Item, normalizedTitle: string): number {
+  const platform = normalizePlatform(item.platform);
+
+  if (platform === "poster" && matchesMerchPlatform(item, normalizedTitle)) {
+    return 0.22;
+  }
+
+  if (platform === "keychain" && matchesMerchPlatform(item, normalizedTitle)) {
+    return 0.18;
+  }
+
+  if (platform === "mug" && matchesMerchPlatform(item, normalizedTitle)) {
+    return 0.18;
+  }
+
+  if (platform === "plush" && matchesMerchPlatform(item, normalizedTitle)) {
+    return 0.18;
+  }
+
+  if (platform === "pin" && matchesMerchPlatform(item, normalizedTitle)) {
+    return 0.18;
+  }
+
+  if (platform === "mousepad" && matchesMerchPlatform(item, normalizedTitle)) {
+    return 0.18;
+  }
+
+  if (platform === "apparel" && matchesMerchPlatform(item, normalizedTitle)) {
+    return 0.18;
+  }
+
+  return 0;
 }
 
 function chooseFinalPrice(
@@ -395,6 +522,7 @@ function getImportantTokens(
   if (category === "merch") {
     [
       "poster",
+      "póster",
       "keychain",
       "llavero",
       "pin",
@@ -418,6 +546,39 @@ function getImportantTokens(
     .filter(Boolean)
     .filter((token) => token.length > 2)
     .filter((token) => !stopWords.has(token));
+}
+
+function normalizePlatform(value: string | null): string {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9áéíóúñ]+/g, "")
+    .trim();
+
+  if (!normalized) return "othermerch";
+
+  if (normalized.includes("poster")) return "poster";
+  if (normalized.includes("keychain") || normalized.includes("llavero")) {
+    return "keychain";
+  }
+  if (normalized.includes("mug") || normalized.includes("taza")) return "mug";
+  if (normalized.includes("plush") || normalized.includes("peluche")) {
+    return "plush";
+  }
+  if (normalized.includes("pin") || normalized.includes("chapa")) return "pin";
+  if (normalized.includes("mousepad") || normalized.includes("alfombrilla")) {
+    return "mousepad";
+  }
+  if (normalized.includes("apparel") || normalized.includes("ropa")) {
+    return "apparel";
+  }
+  if (normalized.includes("artprint")) return "artprint";
+  if (normalized.includes("acrylicstand")) return "acrylicstand";
+
+  return "othermerch";
+}
+
+function hasAny(value: string, tokens: string[]): boolean {
+  return tokens.some((token) => value.includes(token));
 }
 
 function normalizeSearchText(value: string): string {
@@ -474,6 +635,10 @@ function computeConfidence(
 
   if (matched.includes(wanted)) {
     confidence += 0.05;
+  }
+
+  if (item.category === "merch") {
+    confidence += getMerchPlatformBoost(item, matched) * 0.5;
   }
 
   const cap = item.category === "merch" ? 0.88 : 0.92;
