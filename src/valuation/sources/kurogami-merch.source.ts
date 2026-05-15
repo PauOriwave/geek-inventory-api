@@ -26,10 +26,10 @@ const MERCH_CATEGORY_URLS: Record<string, string[]> = {
   mug: ["/es/familia/tazas"],
   poster: ["/es/familia/posters"],
   keychain: ["/es/familia/llaveros"],
-  pin: ["/es/familia/pins"],
-  mousepad: ["/es/familia/alfombrillas"],
+  pin: ["/es/familia/regalos-anime"],
+  mousepad: ["/es/familia/regalos-anime", "/es/familia/regalos-videojuegos"],
   apparel: ["/es/familia/ropa"],
-  artprint: ["/es/familia/posters"],
+  artprint: ["/es/familia/posters", "/es/familia/regalos-anime"],
   acrylicstand: ["/es/familia/regalos-anime"],
   othermerch: [
     "/es/familia/regalos-anime",
@@ -183,6 +183,8 @@ function buildDirectProductUrls(item: Item, query: string): string[] {
 
     if (platform === "poster" || platform === "artprint") {
       urls.add(`${BASE_URL}/es/producto/poster-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/lamina-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/print-${slugBase}`);
       urls.add(`${BASE_URL}/es/producto/poster-${slugBase}-pokemon`);
     }
 
@@ -194,6 +196,14 @@ function buildDirectProductUrls(item: Item, query: string): string[] {
     if (platform === "pin") {
       urls.add(`${BASE_URL}/es/producto/pin-${slugBase}`);
       urls.add(`${BASE_URL}/es/producto/chapa-${slugBase}`);
+    }
+
+    if (platform === "acrylicstand") {
+      urls.add(`${BASE_URL}/es/producto/acrylic-stand-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/stand-acrilico-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/stand-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/acrilico-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/figura-acrilica-${slugBase}`);
     }
   }
 
@@ -286,18 +296,47 @@ function buildSearchQueries(item: Item): string[] {
 
   if (platform === "mousepad") {
     queries.add(raw.replace(/\bmousepad\b/gi, "alfombrilla"));
+    queries.add(raw.replace(/\bmousepad\b/gi, "tapete"));
 
     if (!normalized.includes("alfombrilla") && !normalized.includes("tapete")) {
       queries.add(toSpanishTypeFirst(raw, ["mousepad"], "Alfombrilla"));
+      queries.add(toSpanishTypeFirst(raw, ["mousepad"], "Tapete"));
     }
   }
 
   if (platform === "poster" || platform === "artprint") {
     queries.add(raw.replace(/\bart print\b/gi, "poster"));
     queries.add(raw.replace(/\bprint\b/gi, "poster"));
+    queries.add(raw.replace(/\bart print\b/gi, "lámina"));
+    queries.add(raw.replace(/\bprint\b/gi, "lámina"));
 
     if (!normalized.includes("poster")) {
       queries.add(toSpanishTypeFirst(raw, ["art print", "print"], "Poster"));
+    }
+
+    if (!normalized.includes("lamina") && !normalized.includes("lámina")) {
+      queries.add(toSpanishTypeFirst(raw, ["art print", "print"], "Lámina"));
+    }
+  }
+
+  if (platform === "acrylicstand") {
+    queries.add(raw.replace(/\bacrylic stand\b/gi, "stand acrílico"));
+    queries.add(raw.replace(/\bacrylic\b/gi, "acrílico"));
+    queries.add(raw.replace(/\bstandee\b/gi, "stand acrílico"));
+
+    if (
+      !normalized.includes("acrylic") &&
+      !normalized.includes("acrilico") &&
+      !normalized.includes("acrílico") &&
+      !normalized.includes("stand")
+    ) {
+      queries.add(
+        toSpanishTypeFirst(
+          raw,
+          ["acrylic stand", "acrylic", "standee", "stand"],
+          "Stand acrílico"
+        )
+      );
     }
   }
 
@@ -312,6 +351,11 @@ function buildSearchQueries(item: Item): string[] {
     queries.add(raw.replace(/\bpin\b/gi, "pins"));
   }
 
+  if (platform === "othermerch") {
+    queries.add(raw.replace(/\bmerch\b/gi, ""));
+    queries.add(raw.replace(/\bmerchandise\b/gi, ""));
+  }
+
   const tokens = normalized.split(" ").filter(Boolean);
 
   if (tokens.length > 1) {
@@ -323,7 +367,7 @@ function buildSearchQueries(item: Item): string[] {
     .map((query) => query.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
-    .slice(0, 8);
+    .slice(0, 10);
 }
 
 function toSpanishTypeFirst(
@@ -505,6 +549,17 @@ function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
     if (platform === "mousepad") {
       return hasAny(title, ["alfombrilla", "mousepad", "tapete", "playmat"]);
     }
+    if (platform === "acrylicstand") {
+      return hasAny(title, [
+        "acrylic",
+        "acrilico",
+        "acrílico",
+        "stand",
+        "standee",
+        "figura acrilica",
+        "figura acrílica"
+      ]);
+    }
     if (platform === "apparel") {
       return hasAny(title, [
         "camiseta",
@@ -639,9 +694,11 @@ function getPlatformBoost(platform: string | null, normalizedTitle: string): num
   if (type === "plush" && hasAny(normalizedTitle, ["peluche", "plush"])) return 0.18;
   if (type === "mug" && hasAny(normalizedTitle, ["taza", "mug"])) return 0.18;
   if (type === "poster" && hasAny(normalizedTitle, ["poster"])) return 0.18;
+  if (type === "artprint" && hasAny(normalizedTitle, ["poster", "lamina", "lámina", "print"])) return 0.18;
   if (type === "keychain" && hasAny(normalizedTitle, ["llavero", "keychain"])) return 0.18;
   if (type === "pin" && hasAny(normalizedTitle, ["pin", "chapa"])) return 0.18;
   if (type === "mousepad" && hasAny(normalizedTitle, ["alfombrilla", "mousepad", "tapete", "playmat"])) return 0.18;
+  if (type === "acrylicstand" && hasAny(normalizedTitle, ["acrylic", "acrilico", "acrílico", "stand", "standee"])) return 0.18;
   if (type === "apparel" && hasAny(normalizedTitle, ["camiseta", "sudadera", "gorra", "shirt", "hoodie"])) return 0.18;
 
   return 0;
@@ -658,9 +715,18 @@ function getPlatformWords(platform: string | null): string[] {
     pin: ["pin", "pins", "chapa"],
     mousepad: ["mousepad", "alfombrilla", "tapete", "playmat"],
     apparel: ["apparel", "ropa", "camiseta", "shirt"],
-    artprint: ["art", "print", "lamina", "lámina"],
-    acrylicstand: ["acrylic", "stand"],
-    othermerch: ["merch"]
+    artprint: ["art", "print", "lamina", "lámina", "poster"],
+    acrylicstand: [
+      "acrylic",
+      "acrilico",
+      "acrílico",
+      "stand",
+      "standee",
+      "figura",
+      "acrilica",
+      "acrílica"
+    ],
+    othermerch: ["merch", "merchandise", "regalo", "anime", "gaming"]
   };
 
   return words[type] ?? [];
@@ -677,12 +743,19 @@ function normalizePlatform(value: string | null): string {
   if (normalized.includes("plush") || normalized.includes("peluche")) return "plush";
   if (normalized.includes("mug") || normalized.includes("taza")) return "mug";
   if (normalized.includes("poster")) return "poster";
+  if (normalized.includes("artprint") || normalized.includes("lamina") || normalized.includes("lámina")) return "artprint";
   if (normalized.includes("keychain") || normalized.includes("llavero")) return "keychain";
   if (normalized.includes("pin") || normalized.includes("chapa")) return "pin";
-  if (normalized.includes("mousepad") || normalized.includes("alfombrilla")) return "mousepad";
+  if (normalized.includes("mousepad") || normalized.includes("alfombrilla") || normalized.includes("tapete") || normalized.includes("playmat")) return "mousepad";
   if (normalized.includes("apparel") || normalized.includes("ropa")) return "apparel";
-  if (normalized.includes("artprint")) return "artprint";
-  if (normalized.includes("acrylicstand")) return "acrylicstand";
+  if (
+    normalized.includes("acrylicstand") ||
+    normalized.includes("acrilico") ||
+    normalized.includes("acrílico") ||
+    normalized.includes("standee")
+  ) {
+    return "acrylicstand";
+  }
 
   return "othermerch";
 }
