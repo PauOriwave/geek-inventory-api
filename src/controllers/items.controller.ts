@@ -46,6 +46,17 @@ function getStoredValuationFromItem(item: {
   };
 }
 
+function normalizeIncomingCategory(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+
+  const normalized = value.trim().toLowerCase();
+
+  if (!normalized) return undefined;
+  if (normalized === "other") return "merch";
+
+  return normalized;
+}
+
 export const listItems = async (req: Request, res: Response) => {
   const userId = req.user?.id;
 
@@ -55,7 +66,9 @@ export const listItems = async (req: Request, res: Response) => {
 
   const q = typeof req.query.q === "string" ? req.query.q : undefined;
   const category =
-    typeof req.query.category === "string" ? req.query.category : undefined;
+    typeof req.query.category === "string"
+      ? normalizeIncomingCategory(req.query.category)
+      : undefined;
   const sort = typeof req.query.sort === "string" ? req.query.sort : undefined;
 
   const minPrice =
@@ -113,7 +126,7 @@ export const createItem = async (req: Request, res: Response) => {
       userId,
       plan,
       name,
-      category,
+      category: normalizeIncomingCategory(category) ?? "merch",
       estimatedPrice: Number(estimatedPrice),
       quantity: Number(quantity),
       condition,
@@ -214,7 +227,7 @@ export const updateItem = async (req: Request, res: Response) => {
   const item = await updateItemService(userId, id, {
     category:
       typeof category === "string"
-        ? category
+        ? normalizeIncomingCategory(category)
         : category === null
           ? "merch"
           : undefined,
