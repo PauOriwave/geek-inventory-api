@@ -52,10 +52,46 @@ type UpdateItemInput = {
   notes?: string;
 };
 
+const VALID_CATEGORIES = new Set([
+  "videogame",
+  "book",
+  "comic",
+  "tcg",
+  "figure",
+  "boardgame",
+  "miniature",
+  "lego",
+  "movie",
+  "merch",
+  "guide",
+  "magazine"
+]);
+
+function sanitizeCategory(value?: string): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    return "merch";
+  }
+
+  if (normalized === "other") {
+    return "merch";
+  }
+
+  if (!VALID_CATEGORIES.has(normalized)) {
+    return "merch";
+  }
+
+  return normalized;
+}
+
 function hasValuationIdentityChanged(
   current: {
     platform: string | null;
     region: string | null;
+    category: string;
   },
   incoming: UpdateItemInput
 ) {
@@ -69,9 +105,15 @@ function hasValuationIdentityChanged(
       ? incoming.region || null
       : current.region;
 
+  const nextCategory =
+    incoming.category !== undefined
+      ? sanitizeCategory(incoming.category)
+      : current.category;
+
   return (
     nextPlatform !== current.platform ||
-    nextRegion !== current.region
+    nextRegion !== current.region ||
+    nextCategory !== current.category
   );
 }
 
@@ -100,11 +142,13 @@ export async function createItemService(input: CreateItemInput) {
     }
   }
 
+  const sanitizedCategory = sanitizeCategory(input.category);
+
   const item = await prisma.item.create({
     data: {
       userId: input.userId,
       name: input.name,
-      category: input.category,
+      category: sanitizedCategory,
       estimatedPrice: input.estimatedPrice,
       quantity: input.quantity,
       condition: input.condition || null,
@@ -150,7 +194,7 @@ export async function listItemsService(input: ListItemsInput) {
   }
 
   if (input.category) {
-    where.category = input.category;
+    where.category = sanitizeCategory(input.category);
   }
 
   if (input.minPrice != null || input.maxPrice != null) {
@@ -267,7 +311,7 @@ export async function updateItemService(
 
     data: {
       ...(data.category !== undefined
-        ? { category: data.category || "merch" }
+        ? { category: sanitizeCategory(data.category) }
         : {}),
 
       ...(data.quantity != null
