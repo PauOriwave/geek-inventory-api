@@ -34,24 +34,24 @@ enum SupportedCurrency {
 }
 
 model User {
-  id               String   @id @default(uuid())
-  email            String   @unique
-  passwordHash     String
-  createdAt        DateTime @default(now())
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
 
-  plan             String   @default("free")
+  plan             String    @default("free")
   premiumStartedAt DateTime?
 
-  items            Item[]
-  wishlistItems    WishlistItem[]
+  items         Item[]
+  wishlistItems WishlistItem[]
 }
 
 model Item {
-  id                  String             @id @default(uuid())
-  name                String
-  category            String
-  estimatedPrice      Decimal
-  quantity            Int
+  id             String  @id @default(uuid())
+  name           String
+  category       String
+  estimatedPrice Decimal
+  quantity       Int
 
   marketValue         Decimal?
   marketCurrency      SupportedCurrency?
@@ -59,34 +59,34 @@ model Item {
   valuationConfidence Float?
   lastValuationAt     DateTime?
 
-  condition           String?
-  notes               String?
-  platform            String?
-  completeness        String?
-  region              String?
+  condition    String?
+  notes        String?
+  platform     String?
+  completeness String?
+  region       String?
 
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  userId              String
-  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  snapshots           ItemValuationSnapshot[]
-  scraperRuns         ScraperRunLog[]
-  sourceMarketData    SourceMarketData[]
+  snapshots        ItemValuationSnapshot[]
+  scraperRuns      ScraperRunLog[]
+  sourceMarketData SourceMarketData[]
 }
 
 model ItemValuationSnapshot {
-  id          String             @id @default(uuid())
-  itemId      String
-  item        Item               @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  itemId String
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   source      String
   marketValue Decimal
   currency    SupportedCurrency?
   confidence  Float?
 
-  recordedAt  DateTime           @default(now())
+  recordedAt DateTime @default(now())
 }
 
 model WishlistItem {
@@ -100,11 +100,11 @@ model WishlistItem {
   region                String?
   notes                 String?
 
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  userId                String
-  user                  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model PriceCache {
@@ -121,22 +121,22 @@ model PriceCache {
 }
 
 model ScraperRunLog {
-  id           String           @id @default(uuid())
-  itemId        String
-  item          Item             @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  itemId String
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
-  source        String
-  query         String?
-  status        ScraperRunStatus
+  source String
+  query  String?
+  status ScraperRunStatus
 
-  matchedTitle  String?
-  matchedUrl    String?
-  matchedPrice  Decimal?
-  currency      SupportedCurrency?
-  confidence    Float?
-  errorMessage  String?
+  matchedTitle String?
+  matchedUrl   String?
+  matchedPrice Decimal?
+  currency     SupportedCurrency?
+  confidence   Float?
+  errorMessage String?
 
-  createdAt     DateTime         @default(now())
+  createdAt DateTime @default(now())
 
   @@index([itemId, createdAt])
   @@index([source, createdAt])
@@ -144,15 +144,15 @@ model ScraperRunLog {
 }
 
 model SourceMarketData {
-  id         String   @id @default(uuid())
-  itemId     String
-  item       Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  itemId String
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
-  source     String
-  sourceUrl  String?
-  rawData    Json
+  source    String
+  sourceUrl String?
+  rawData   Json
 
-  createdAt  DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([itemId, createdAt])
   @@index([source, createdAt])
