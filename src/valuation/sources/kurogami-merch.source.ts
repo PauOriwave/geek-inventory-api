@@ -28,14 +28,12 @@ const MERCH_CATEGORY_URLS: Record<string, string[]> = {
   keychain: ["/es/familia/llaveros"],
   pin: ["/es/familia/regalos-anime"],
   mousepad: ["/es/familia/regalos-anime", "/es/familia/regalos-videojuegos"],
-  apparel: ["/es/familia/ropa"],
   artprint: ["/es/familia/posters", "/es/familia/regalos-anime"],
   acrylicstand: ["/es/familia/regalos-anime"],
-  othermerch: [
-    "/es/familia/regalos-anime",
-    "/es/familia/regalos-videojuegos",
-    "/es/familia/merchandising-kurogami"
-  ]
+  gachapon: ["/es/familia/regalos-anime", "/es/familia/figuras-anime"],
+  tazo: ["/es/familia/regalos-anime", "/es/familia/regalos-videojuegos"],
+  stack: ["/es/familia/regalos-anime", "/es/familia/regalos-videojuegos"],
+  album: ["/es/familia/libros-anime", "/es/familia/regalos-anime"]
 };
 
 export async function getKurogamiMerchPrice(
@@ -205,6 +203,28 @@ function buildDirectProductUrls(item: Item, query: string): string[] {
       urls.add(`${BASE_URL}/es/producto/acrilico-${slugBase}`);
       urls.add(`${BASE_URL}/es/producto/figura-acrilica-${slugBase}`);
     }
+
+    if (platform === "gachapon") {
+      urls.add(`${BASE_URL}/es/producto/${slugBase}-gachapon`);
+      urls.add(`${BASE_URL}/es/producto/${slugBase}-gashapon`);
+      urls.add(`${BASE_URL}/es/producto/gachapon-${slugBase}`);
+    }
+
+    if (platform === "tazo") {
+      urls.add(`${BASE_URL}/es/producto/${slugBase}-tazo`);
+      urls.add(`${BASE_URL}/es/producto/tazo-${slugBase}`);
+    }
+
+    if (platform === "stack") {
+      urls.add(`${BASE_URL}/es/producto/${slugBase}-stack`);
+      urls.add(`${BASE_URL}/es/producto/stack-${slugBase}`);
+      urls.add(`${BASE_URL}/es/producto/iman-${slugBase}`);
+    }
+
+    if (platform === "album") {
+      urls.add(`${BASE_URL}/es/producto/${slugBase}-album`);
+      urls.add(`${BASE_URL}/es/producto/album-${slugBase}`);
+    }
   }
 
   return [...urls];
@@ -340,20 +360,32 @@ function buildSearchQueries(item: Item): string[] {
     }
   }
 
-  if (platform === "apparel") {
-    queries.add(raw.replace(/\bapparel\b/gi, "ropa"));
-    queries.add(raw.replace(/\bt-shirt\b/gi, "camiseta"));
-    queries.add(raw.replace(/\bshirt\b/gi, "camiseta"));
-  }
-
   if (platform === "pin") {
     queries.add(raw.replace(/\bpin\b/gi, "chapa"));
     queries.add(raw.replace(/\bpin\b/gi, "pins"));
   }
 
-  if (platform === "othermerch") {
-    queries.add(raw.replace(/\bmerch\b/gi, ""));
-    queries.add(raw.replace(/\bmerchandise\b/gi, ""));
+  if (platform === "gachapon") {
+    queries.add(`${raw} capsule toy`);
+    queries.add(`${raw} gachapon`);
+    queries.add(`${raw} gashapon`);
+  }
+
+  if (platform === "tazo") {
+    queries.add(`${raw} tazo`);
+    queries.add(`${raw} pog`);
+  }
+
+  if (platform === "stack") {
+    queries.add(`${raw} stack`);
+    queries.add(`${raw} magnet`);
+    queries.add(`${raw} imán`);
+  }
+
+  if (platform === "album") {
+    queries.add(`${raw} album`);
+    queries.add(`${raw} sticker album`);
+    queries.add(`${raw} álbum`);
   }
 
   const tokens = normalized.split(" ").filter(Boolean);
@@ -388,7 +420,7 @@ function toSpanishTypeFirst(
 
 function buildSearchUrls(item: Item, query: string): string[] {
   const platform = normalizePlatform(item.platform);
-  const paths = MERCH_CATEGORY_URLS[platform] ?? MERCH_CATEGORY_URLS.othermerch;
+  const paths = MERCH_CATEGORY_URLS[platform] ?? MERCH_CATEGORY_URLS.poster;
 
   const encoded = encodeURIComponent(query);
   const urls = new Set<string>();
@@ -560,16 +592,17 @@ function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
         "figura acrílica"
       ]);
     }
-    if (platform === "apparel") {
-      return hasAny(title, [
-        "camiseta",
-        "sudadera",
-        "gorra",
-        "ropa",
-        "shirt",
-        "hoodie",
-        "cap"
-      ]);
+    if (platform === "gachapon") {
+      return hasAny(title, ["gachapon", "gashapon", "capsule"]);
+    }
+    if (platform === "tazo") {
+      return hasAny(title, ["tazo", "pog"]);
+    }
+    if (platform === "stack") {
+      return hasAny(title, ["stack", "magnet", "imán", "iman"]);
+    }
+    if (platform === "album") {
+      return hasAny(title, ["album", "álbum", "sticker"]);
     }
 
     return true;
@@ -699,7 +732,10 @@ function getPlatformBoost(platform: string | null, normalizedTitle: string): num
   if (type === "pin" && hasAny(normalizedTitle, ["pin", "chapa"])) return 0.18;
   if (type === "mousepad" && hasAny(normalizedTitle, ["alfombrilla", "mousepad", "tapete", "playmat"])) return 0.18;
   if (type === "acrylicstand" && hasAny(normalizedTitle, ["acrylic", "acrilico", "acrílico", "stand", "standee"])) return 0.18;
-  if (type === "apparel" && hasAny(normalizedTitle, ["camiseta", "sudadera", "gorra", "shirt", "hoodie"])) return 0.18;
+  if (type === "gachapon" && hasAny(normalizedTitle, ["gachapon", "gashapon", "capsule"])) return 0.18;
+  if (type === "tazo" && hasAny(normalizedTitle, ["tazo", "pog"])) return 0.18;
+  if (type === "stack" && hasAny(normalizedTitle, ["stack", "magnet", "imán", "iman"])) return 0.18;
+  if (type === "album" && hasAny(normalizedTitle, ["album", "álbum", "sticker"])) return 0.18;
 
   return 0;
 }
@@ -714,7 +750,6 @@ function getPlatformWords(platform: string | null): string[] {
     keychain: ["keychain", "llavero"],
     pin: ["pin", "pins", "chapa"],
     mousepad: ["mousepad", "alfombrilla", "tapete", "playmat"],
-    apparel: ["apparel", "ropa", "camiseta", "shirt"],
     artprint: ["art", "print", "lamina", "lámina", "poster"],
     acrylicstand: [
       "acrylic",
@@ -726,7 +761,10 @@ function getPlatformWords(platform: string | null): string[] {
       "acrilica",
       "acrílica"
     ],
-    othermerch: ["merch", "merchandise", "regalo", "anime", "gaming"]
+    gachapon: ["gachapon", "gashapon", "capsule", "toy"],
+    tazo: ["tazo", "pog"],
+    stack: ["stack", "magnet", "imán", "iman"],
+    album: ["album", "álbum", "sticker"]
   };
 
   return words[type] ?? [];
@@ -738,7 +776,7 @@ function normalizePlatform(value: string | null): string {
     .replace(/[^a-z0-9áéíóúñ]+/g, "")
     .trim();
 
-  if (!normalized) return "othermerch";
+  if (!normalized) return "poster";
 
   if (normalized.includes("plush") || normalized.includes("peluche")) return "plush";
   if (normalized.includes("mug") || normalized.includes("taza")) return "mug";
@@ -747,7 +785,6 @@ function normalizePlatform(value: string | null): string {
   if (normalized.includes("keychain") || normalized.includes("llavero")) return "keychain";
   if (normalized.includes("pin") || normalized.includes("chapa")) return "pin";
   if (normalized.includes("mousepad") || normalized.includes("alfombrilla") || normalized.includes("tapete") || normalized.includes("playmat")) return "mousepad";
-  if (normalized.includes("apparel") || normalized.includes("ropa")) return "apparel";
   if (
     normalized.includes("acrylicstand") ||
     normalized.includes("acrilico") ||
@@ -756,8 +793,18 @@ function normalizePlatform(value: string | null): string {
   ) {
     return "acrylicstand";
   }
+  if (
+    normalized.includes("gachapon") ||
+    normalized.includes("gashapon") ||
+    normalized.includes("capsuletoy")
+  ) {
+    return "gachapon";
+  }
+  if (normalized.includes("tazo") || normalized.includes("pog")) return "tazo";
+  if (normalized.includes("stack") || normalized.includes("magnet")) return "stack";
+  if (normalized.includes("album") || normalized.includes("álbum") || normalized.includes("sticker")) return "album";
 
-  return "othermerch";
+  return "poster";
 }
 
 function hasAny(value: string, tokens: string[]): boolean {

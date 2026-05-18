@@ -21,6 +21,13 @@ const DIRECT_PRODUCT_TIMEOUT_MS = 5000;
 
 const SUPPORTED_CATEGORIES = new Set(["merch", "figure"]);
 
+const SUPPORTED_MERCH_PLATFORMS = new Set([
+  "acrylicstand",
+  "gachapon",
+  "album",
+  "figure"
+]);
+
 export async function getNinNinGamePrice(
   item: Item
 ): Promise<ScraperSourceResult | null> {
@@ -37,10 +44,7 @@ export async function getNinNinGamePrice(
 
   const platform = normalizePlatform(item.platform);
 
-  if (
-    item.category === "merch" &&
-    !["acrylicstand", "figure", "othermerch"].includes(platform)
-  ) {
+  if (item.category === "merch" && !SUPPORTED_MERCH_PLATFORMS.has(platform)) {
     return null;
   }
 
@@ -106,26 +110,40 @@ function buildSearchUrls(query: string): string[] {
 function buildQueries(item: Item): string[] {
   const raw = clean(item.name);
   const normalized = normalizeSearchText(raw);
+  const platform = normalizePlatform(item.platform);
 
   const queries = new Set<string>();
 
   queries.add(raw);
 
-  if (normalized.includes("acrylic")) {
+  if (platform === "acrylicstand") {
     queries.add(raw.replace(/acrylic/gi, ""));
-  }
-
-  if (normalized.includes("stand")) {
     queries.add(raw.replace(/stand/gi, ""));
-  }
-
-  if (normalized.includes("acrílico") || normalized.includes("acrilico")) {
     queries.add(raw.replace(/acr[ií]lico/gi, ""));
+    queries.add(`${raw} acrylic stand`);
+    queries.add(`${raw} acryl`);
+    queries.add(`${raw} standee`);
   }
 
-  queries.add(`${raw} acrylic stand`);
-  queries.add(`${raw} acryl`);
-  queries.add(`${raw} figure`);
+  if (platform === "gachapon") {
+    queries.add(`${raw} gachapon`);
+    queries.add(`${raw} gashapon`);
+    queries.add(`${raw} capsule toy`);
+    queries.add(raw.replace(/gachapon/gi, ""));
+    queries.add(raw.replace(/gashapon/gi, ""));
+  }
+
+  if (platform === "album") {
+    queries.add(`${raw} album`);
+    queries.add(`${raw} sticker album`);
+    queries.add(`${raw} artbook`);
+    queries.add(raw.replace(/album/gi, ""));
+  }
+
+  if (platform === "figure" || item.category === "figure") {
+    queries.add(`${raw} figure`);
+    queries.add(`${raw} figurine`);
+  }
 
   const tokens = normalized.split(" ").filter(Boolean);
 
@@ -153,9 +171,7 @@ function extractCandidates(html: string): Candidate[] {
     (_, el) => {
       const root = $(el);
 
-      const href =
-        root.find("a[href]").first().attr("href") || "";
-
+      const href = root.find("a[href]").first().attr("href") || "";
       const url = absolutize(href);
 
       if (!looksLikeProductUrl(url)) return;
@@ -246,14 +262,35 @@ function filterCandidates(
   candidates: Candidate[]
 ): Candidate[] {
   const wanted = normalizeSearchText(item.name);
-  const tokens = getImportantTokens(wanted);
+  const tokens = getImportantTokens(wanted, item.platform);
 
   if (tokens.length === 0) return [];
 
   return candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
 
-    return tokens.every((token) => title.includes(token));
+    const hasCoreTokens = tokens.every((token) => title.includes(token));
+    if (!hasCoreTokens) return false;
+
+    const platform = normalizePlatform(item.platform);
+
+    if (platform === "acrylicstand") {
+      return hasAny(title, ["acrylic", "acryl", "stand", "standee"]);
+    }
+
+    if (platform === "gachapon") {
+      return hasAny(title, ["gachapon", "gashapon", "capsule"]);
+    }
+
+    if (platform === "album") {
+      return hasAny(title, ["album", "sticker album", "artbook", "book"]);
+    }
+
+    if (platform === "figure" || item.category === "figure") {
+      return hasAny(title, ["figure", "figurine", "statue", "pvc"]);
+    }
+
+    return true;
   });
 }
 
@@ -276,13 +313,7 @@ function pickBestCandidate(
       score += 0.25;
     }
 
-    if (
-      title.includes("acrylic") ||
-      title.includes("acryl") ||
-      title.includes("stand")
-    ) {
-      score += 0.12;
-    }
+    score += getPlatformBoost(item.platform, title, item.category);
 
     return {
       candidate,
@@ -495,13 +526,39 @@ function normalizePlatform(
   }
 
   if (
+    normalized.includes("gachapon") ||
+    normalized.includes("gashapon") ||
+    normalized.includes("capsuletoy")
+  ) {
+    return "gachapon";
+  }
+
+  if (
+    normalized.includes("album") ||
+    normalized.includes("álbum") ||
+    normalized.includes("sticker")
+  ) {
+    return "album";
+  }
+
+  if (
     normalized.includes("figure") ||
-    normalized.includes("figura")
+    normalized.includes("figura") ||
+    normalized.includes("pvc") ||
+    normalized.includes("statue")
   ) {
     return "figure";
   }
 
-  return "othermerch";
+  if (normalized.includes("tazo") || normalized.includes("pog")) {
+    return "tazo";
+  }
+
+  if (normalized.includes("stack") || normalized.includes("magnet")) {
+    return "stack";
+  }
+
+  return "unsupported";
 }
 
 function normalizeSearchText(
@@ -513,24 +570,80 @@ function normalizeSearchText(
 }
 
 function getImportantTokens(
-  value: string
+  value: string,
+  platform: string | null
 ): string[] {
+  const type = normalizePlatform(platform);
+
+  const stopWords = new Set([
+    "stand",
+    "acrylic",
+    "acrilico",
+    "acrílico",
+    "figure",
+    "figura",
+    "merch",
+    "gachapon",
+    "gashapon",
+    "capsule",
+    "toy",
+    "album",
+    "álbum",
+    "sticker",
+    "tazo",
+    "pog",
+    "stack",
+    "magnet"
+  ]);
+
+  if (type === "album") {
+    stopWords.delete("album");
+    stopWords.delete("sticker");
+  }
+
   return value
     .split(" ")
     .filter(Boolean)
     .filter((token) => token.length > 2)
-    .filter(
-      (token) =>
-        ![
-          "stand",
-          "acrylic",
-          "acrilico",
-          "acrílico",
-          "figure",
-          "figura",
-          "merch"
-        ].includes(token)
-    );
+    .filter((token) => !stopWords.has(token));
+}
+
+function getPlatformBoost(
+  platform: string | null,
+  normalizedTitle: string,
+  category: string
+): number {
+  const type = normalizePlatform(platform);
+
+  if (
+    type === "acrylicstand" &&
+    hasAny(normalizedTitle, ["acrylic", "acryl", "stand", "standee"])
+  ) {
+    return 0.17;
+  }
+
+  if (
+    type === "gachapon" &&
+    hasAny(normalizedTitle, ["gachapon", "gashapon", "capsule"])
+  ) {
+    return 0.17;
+  }
+
+  if (
+    type === "album" &&
+    hasAny(normalizedTitle, ["album", "sticker album", "artbook", "book"])
+  ) {
+    return 0.14;
+  }
+
+  if (
+    (type === "figure" || category === "figure") &&
+    hasAny(normalizedTitle, ["figure", "figurine", "statue", "pvc"])
+  ) {
+    return 0.17;
+  }
+
+  return 0;
 }
 
 function clean(value: string): string {
@@ -585,6 +698,10 @@ function looksLikeProductUrl(url: string): boolean {
   );
 }
 
+function hasAny(value: string, tokens: string[]): boolean {
+  return tokens.some((token) => value.includes(token));
+}
+
 function computeConfidence(
   item: Item,
   matchedTitle: string
@@ -600,13 +717,7 @@ function computeConfidence(
     confidence += 0.08;
   }
 
-  if (
-    matched.includes("acrylic") ||
-    matched.includes("acryl") ||
-    matched.includes("stand")
-  ) {
-    confidence += 0.05;
-  }
+  confidence += getPlatformBoost(item.platform, matched, item.category);
 
   return Math.max(
     0.3,
