@@ -17,6 +17,8 @@ enum Category {
   lego
   movie
   merch
+  guide
+  magazine
 }
 
 enum ScraperRunStatus {
