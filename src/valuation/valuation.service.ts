@@ -72,13 +72,13 @@ const sources: SourceDefinition[] = [
   {
     name: "todos_tus_libros",
     priority: 86,
-    categories: ["book"],
+    categories: ["book", "guide", "magazine"],
     handler: getTodosTusLibrosPrice
   },
   {
     name: "la_central",
     priority: 76,
-    categories: ["book"],
+    categories: ["book", "guide", "magazine"],
     handler: getLaCentralPrice
   },
   {
@@ -90,7 +90,7 @@ const sources: SourceDefinition[] = [
   {
     name: "norma_comics",
     priority: 86,
-    categories: ["comic", "book"],
+    categories: ["comic", "book", "guide", "magazine"],
     handler: getNormaComicsPrice
   },
   {
@@ -182,11 +182,13 @@ const sources: SourceDefinition[] = [
 ];
 
 function getSourcesForItem(item: Item): SourceDefinition[] {
+  const category = normalizeCategory(item.category);
+
   const categorySources = sources.filter((source) =>
-    source.categories.includes(item.category)
+    source.categories.includes(category)
   );
 
-  if (item.category === "figure") {
+  if (category === "figure") {
     const platform = normalizePlatform(item.platform);
 
     if (platform === "funko_pop" || isFunkoPopItem(item)) {
@@ -207,7 +209,7 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
     );
   }
 
-  if (item.category === "merch") {
+  if (category === "merch") {
     return categorySources.filter((source) =>
       [
         "kurogami_merch",
@@ -218,7 +220,19 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
     );
   }
 
-  if (item.category !== "tcg") return categorySources;
+  if (category === "guide") {
+    return categorySources.filter((source) =>
+      ["todos_tus_libros", "la_central", "norma_comics"].includes(source.name)
+    );
+  }
+
+  if (category === "magazine") {
+    return categorySources.filter((source) =>
+      ["todos_tus_libros", "la_central", "norma_comics"].includes(source.name)
+    );
+  }
+
+  if (category !== "tcg") return categorySources;
 
   const platform = normalizePlatform(item.platform);
 
@@ -237,6 +251,18 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   }
 
   return categorySources;
+}
+
+function normalizeCategory(value: string | null): string {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+
+  if (!normalized) return "merch";
+  if (normalized === "other") return "merch";
+
+  return normalized;
 }
 
 function normalizePlatform(value: string | null): string | null {
@@ -295,19 +321,21 @@ function getMinimumConfidenceForResult(
   item: Item,
   result: ScraperSourceResult
 ): number {
-  if (item.category === "tcg" && result.source === "dungeon_marvels") {
+  const category = normalizeCategory(item.category);
+
+  if (category === "tcg" && result.source === "dungeon_marvels") {
     return TCG_DUNGEON_MARVELS_MIN_CONFIDENCE;
   }
 
-  if (item.category === "merch" && result.source === "dungeon_marvels") {
+  if (category === "merch" && result.source === "dungeon_marvels") {
     return DUNGEON_MARVELS_MERCH_MIN_CONFIDENCE;
   }
 
-  if (item.category === "merch" && result.source === "nin_nin_game") {
+  if (category === "merch" && result.source === "nin_nin_game") {
     return NIN_NIN_GAME_MERCH_MIN_CONFIDENCE;
   }
 
-  if (item.category === "merch") {
+  if (category === "merch") {
     return MERCH_MIN_CONFIDENCE;
   }
 
@@ -426,12 +454,11 @@ async function scrapeValuation(item: Item): Promise<{
   const defaultQuery = buildSourceQuery(item);
   const activeSources = getSourcesForItem(item);
 
-  console.log("[valuation] all registered sources:", sources.map((s) => s.name));
-
   console.log("[valuation] item:", {
     id: item.id,
     name: item.name,
     category: item.category,
+    normalizedCategory: normalizeCategory(item.category),
     platform: item.platform,
     normalizedPlatform: normalizePlatform(item.platform),
     region: item.region
