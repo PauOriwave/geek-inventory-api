@@ -340,6 +340,9 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
 
   const scored = candidates.map((candidate) => {
     const title = normalizeSearchText(candidate.title);
+    const platform = normalizePlatform(item.platform);
+    const category = normalizeCategory(item.category);
+    const editionConflict = hasEditionConflict(wanted, title);
 
     let score = similarityScore(wanted, title);
 
@@ -353,11 +356,20 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
       score += 0.08;
     }
 
-    if (hasEditionConflict(wanted, title)) {
-      score -= 0.65;
+    if (
+      editionConflict &&
+      (category === "guide" || category === "magazine")
+    ) {
+      score -= 1.2;
     }
 
-    const category = normalizeCategory(item.category);
+    if (
+      editionConflict &&
+      category === "guide" &&
+      (platform === "guide" || platform === "officialguide")
+    ) {
+      score -= 1.8;
+    }
 
     if (category === "guide") {
       if (
@@ -414,7 +426,6 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
         score -= 0.2;
       }
 
-      const platform = normalizePlatform(item.platform);
       const isOfficialGuideItem =
         platform === "guide" ||
         platform === "officialguide";
