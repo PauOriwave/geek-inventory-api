@@ -353,6 +353,10 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
       score += 0.08;
     }
 
+    if (hasEditionConflict(wanted, title)) {
+      score -= 0.65;
+    }
+
     const category = normalizeCategory(item.category);
 
     if (category === "guide") {
@@ -727,6 +731,10 @@ function computeConfidence(item: Item, matchedTitle: string): number {
 
   confidence += getCategoryBoost(item, matched);
 
+  if (hasEditionConflict(wanted, matched)) {
+    confidence -= 0.25;
+  }
+
   return Math.max(
     0.25,
     Math.min(
@@ -781,6 +789,97 @@ function getPlatformWords(platform: string | null): string[] {
   };
 
   return words[type] ?? [];
+}
+
+function hasEditionConflict(wanted: string, title: string): boolean {
+  const wantedTokens = extractEditionTokens(wanted);
+  const titleTokens = extractEditionTokens(title);
+
+  if (wantedTokens.length === 0 || titleTokens.length === 0) {
+    return false;
+  }
+
+  return titleTokens.some((token) => !wantedTokens.includes(token));
+}
+
+function extractEditionTokens(value: string): string[] {
+  const normalized = normalizeSearchText(value);
+  const tokens = new Set<string>();
+
+  const compactSpecialMatches = [
+    ...normalized.matchAll(/\b[a-z]+(?:-| )?\d+\b/g)
+  ];
+
+  for (const match of compactSpecialMatches) {
+    tokens.add(match[0].replace(/\s+/g, "-"));
+  }
+
+  const volumeMatches = [
+    ...normalized.matchAll(/\b(?:vol|volumen|volume|n|nº|no|numero|número)\s*\.?\s*(\d+)\b/g)
+  ];
+
+  for (const match of volumeMatches) {
+    tokens.add(`num-${match[1]}`);
+  }
+
+  const arabicMatches = [
+    ...normalized.matchAll(/\b\d+\b/g)
+  ];
+
+  for (const match of arabicMatches) {
+    tokens.add(match[0]);
+  }
+
+  const romanMatches = [
+    ...normalized.matchAll(/\b[ivxlcdm]{1,6}\b/g)
+  ];
+
+  for (const match of romanMatches) {
+    const romanValue = romanToNumber(match[0]);
+
+    if (romanValue != null) {
+      tokens.add(String(romanValue));
+    }
+  }
+
+  return [...tokens];
+}
+
+function romanToNumber(value: string): number | null {
+  const roman = value.toLowerCase();
+
+  if (!/^[ivxlcdm]+$/.test(roman)) {
+    return null;
+  }
+
+  const map: Record<string, number> = {
+    i: 1,
+    v: 5,
+    x: 10,
+    l: 50,
+    c: 100,
+    d: 500,
+    m: 1000
+  };
+
+  let total = 0;
+  let previous = 0;
+
+  for (let i = roman.length - 1; i >= 0; i--) {
+    const current = map[roman[i]];
+
+    if (!current) return null;
+
+    if (current < previous) {
+      total -= current;
+    } else {
+      total += current;
+    }
+
+    previous = current;
+  }
+
+  return total > 0 ? total : null;
 }
 
 function hasAny(value: string, tokens: string[]): boolean {
