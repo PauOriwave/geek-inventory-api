@@ -362,15 +362,23 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
           "guía oficial",
           "official guide",
           "piggyback",
+          "bradygames",
+          "future press",
           "guia estrategia",
           "guía estrategia",
+          "guia estrategia oficial",
+          "guía estrategia oficial",
+          "la guia de estrategia oficial",
+          "la guía de estrategia oficial",
           "guia completa",
           "guía completa",
           "guia playstation",
-          "guía playstation"
+          "guía playstation",
+          "playstation 2",
+          "ps2"
         ])
       ) {
-        score += 0.22;
+        score += 0.35;
       }
 
       if (
@@ -379,10 +387,11 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
           "novela",
           "comic",
           "cómic",
-          "manga"
+          "manga",
+          "resumen"
         ])
       ) {
-        score -= 0.3;
+        score -= 0.4;
       }
 
       if (
@@ -390,10 +399,54 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
           "revista",
           "magazine",
           "playmania",
-          "hobby consolas"
+          "play mania",
+          "play2mania",
+          "play2 mania",
+          "hobby consolas",
+          "guias nº",
+          "guías nº"
         ])
       ) {
-        score -= 0.12;
+        score -= 0.2;
+      }
+
+      const platform = normalizePlatform(item.platform);
+      const isOfficialGuideItem =
+        platform === "guide" ||
+        platform === "officialguide";
+
+      const hasStrongOfficialSignal = hasAny(title, [
+        "piggyback",
+        "guia oficial",
+        "guía oficial",
+        "official guide",
+        "guia estrategia oficial",
+        "guía estrategia oficial",
+        "la guia de estrategia oficial",
+        "la guía de estrategia oficial"
+      ]);
+
+      const looksLikeMagazineGuide = hasAny(title, [
+        "revista",
+        "hobby consolas",
+        "playmania",
+        "play mania",
+        "play2mania",
+        "play2 mania",
+        "guias nº",
+        "guías nº"
+      ]);
+
+      if (isOfficialGuideItem && !hasStrongOfficialSignal) {
+        score -= 0.45;
+      }
+
+      if (isOfficialGuideItem && looksLikeMagazineGuide) {
+        score -= 0.35;
+      }
+
+      if (isOfficialGuideItem && candidate.price && candidate.price < 12) {
+        score -= 0.35;
       }
     }
 
@@ -702,6 +755,7 @@ function normalizePlatform(value: string | null): string {
 
   if (!normalized) return "";
 
+  if (normalized.includes("officialguide")) return "officialguide";
   if (normalized.includes("tazo")) return "tazo";
   if (normalized.includes("stack")) return "stack";
   if (normalized.includes("iman") || normalized.includes("imán")) return "stack";
@@ -717,6 +771,7 @@ function getPlatformWords(platform: string | null): string[] {
   const type = normalizePlatform(platform);
 
   const words: Record<string, string[]> = {
+    officialguide: ["official", "guide", "guia", "guía", "oficial"],
     tazo: ["tazo", "tazos"],
     stack: ["stack", "stacks", "iman", "imán", "imanes"],
     album: ["album", "álbum"],

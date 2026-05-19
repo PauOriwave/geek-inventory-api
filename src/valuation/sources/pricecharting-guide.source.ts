@@ -90,15 +90,25 @@ export async function getPriceChartingGuidePrice(
 function buildQueries(item: Item): string[] {
   const raw = clean(item.name);
 
+  const base = normalizeSearchText(raw)
+    .replace(/\bguia\b/g, "")
+    .replace(/\bguía\b/g, "")
+    .replace(/\bguide\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
   const queries = new Set<string>();
 
-  queries.add(`${raw} strategy guide`);
-  queries.add(`${raw} official guide`);
-  queries.add(`${raw} piggyback`);
-  queries.add(`${raw} bradygames`);
-  queries.add(raw);
+  queries.add(`${base} strategy guide`);
+  queries.add(`${base} official strategy guide`);
+  queries.add(`${base} official guide`);
+  queries.add(`${base} piggyback`);
+  queries.add(`${base} bradygames`);
+  queries.add(base);
 
-  return [...queries];
+  return [...queries]
+    .map((query) => query.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 function extractCandidates(html: string): Candidate[] {
@@ -109,21 +119,15 @@ function extractCandidates(html: string): Candidate[] {
   $("table#games_table tr").each((_, el) => {
     const row = $(el);
 
-    const link =
-      row.find("td.title a").first();
-
-    const href =
-      link.attr("href") || "";
-
-    const title =
-      link.text().trim();
+    const link = row.find("td.title a").first();
+    const href = link.attr("href") || "";
+    const title = link.text().trim();
 
     const priceText =
       row.find("td.js-price").first().text().trim() ||
       row.text();
 
-    const price =
-      parsePrice(priceText);
+    const price = parsePrice(priceText);
 
     if (!href || !title || !price) {
       return;
@@ -143,25 +147,28 @@ function filterCandidates(
   item: Item,
   candidates: Candidate[]
 ): Candidate[] {
-  const wanted =
-    normalizeSearchText(item.name);
+  const wanted = normalizeSearchText(item.name)
+    .replace(/\bguia\b/g, "")
+    .replace(/\bguía\b/g, "")
+    .replace(/\bguide\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  const tokens =
-    wanted.split(" ")
-      .filter(Boolean)
-      .filter((token) => token.length > 2);
+  const tokens = wanted
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => token.length > 2);
+
+  if (tokens.length === 0) return [];
 
   return candidates.filter((candidate) => {
-    const title =
-      normalizeSearchText(candidate.title);
+    const title = normalizeSearchText(candidate.title);
 
-    const matches =
-      tokens.filter((token) =>
-        title.includes(token)
-      );
+    const matches = tokens.filter((token) =>
+      title.includes(token)
+    );
 
-    const ratio =
-      matches.length / tokens.length;
+    const ratio = matches.length / tokens.length;
 
     if (ratio < 0.6) {
       return false;
@@ -190,19 +197,22 @@ function pickBestCandidate(
     return null;
   }
 
-  const wanted =
-    normalizeSearchText(item.name);
+  const wanted = normalizeSearchText(item.name)
+    .replace(/\bguia\b/g, "")
+    .replace(/\bguía\b/g, "")
+    .replace(/\bguide\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
   const scored = candidates.map((candidate) => {
-    const title =
-      normalizeSearchText(candidate.title);
+    const title = normalizeSearchText(candidate.title);
 
-    let score =
-      similarityScore(wanted, title);
+    let score = similarityScore(wanted, title);
 
     if (
       hasAny(title, [
         "official guide",
+        "official strategy guide",
         "strategy guide",
         "piggyback",
         "bradygames"
@@ -211,9 +221,7 @@ function pickBestCandidate(
       score += 0.25;
     }
 
-    if (
-      title.includes(wanted)
-    ) {
+    if (title.includes(wanted)) {
       score += 0.2;
     }
 
@@ -247,11 +255,14 @@ function computeConfidence(
   item: Item,
   matchedTitle: string
 ): number {
-  const wanted =
-    normalizeSearchText(item.name);
+  const wanted = normalizeSearchText(item.name)
+    .replace(/\bguia\b/g, "")
+    .replace(/\bguía\b/g, "")
+    .replace(/\bguide\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  const matched =
-    normalizeSearchText(matchedTitle);
+  const matched = normalizeSearchText(matchedTitle);
 
   let confidence =
     0.5 +
@@ -260,6 +271,7 @@ function computeConfidence(
   if (
     hasAny(matched, [
       "official guide",
+      "official strategy guide",
       "strategy guide",
       "piggyback"
     ])
