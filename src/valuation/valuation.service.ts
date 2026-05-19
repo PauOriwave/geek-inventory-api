@@ -3,6 +3,7 @@ import prisma from "../prisma/client";
 
 import { getPriceChartingVideogamePrice } from "./sources/pricecharting-videogame.source";
 import { getPriceChartingComicPrice } from "./sources/pricecharting-comic.source";
+import { getPriceChartingGuidePrice } from "./sources/pricecharting-guide.source";
 import { getWorldViceousPrice } from "./sources/world-viceous.source";
 import { getCholloGamesPrice } from "./sources/chollo-games.source";
 import { getJuegosMesaRedondaPrice } from "./sources/juegos-mesa-redonda.source";
@@ -49,6 +50,7 @@ const MERCH_MIN_CONFIDENCE = 0.65;
 const DUNGEON_MARVELS_MERCH_MIN_CONFIDENCE = 0.6;
 const NIN_NIN_GAME_MERCH_MIN_CONFIDENCE = 0.55;
 const TODOCOLECCION_MIN_CONFIDENCE = 0.45;
+const PRICECHARTING_GUIDE_MIN_CONFIDENCE = 0.55;
 
 const CACHE_TTL_HOURS = 24;
 
@@ -88,6 +90,12 @@ const sources: SourceDefinition[] = [
     priority: 89,
     categories: ["comic"],
     handler: getPriceChartingComicPrice
+  },
+  {
+    name: "pricecharting_guide",
+    priority: 96,
+    categories: ["guide"],
+    handler: getPriceChartingGuidePrice
   },
   {
     name: "norma_comics",
@@ -232,6 +240,7 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (category === "guide") {
     return categorySources.filter((source) =>
       [
+        "pricecharting_guide",
         "todocoleccion",
         "todos_tus_libros",
         "la_central",
@@ -341,6 +350,10 @@ function getMinimumConfidenceForResult(
   result: ScraperSourceResult
 ): number {
   const category = normalizeCategory(item.category);
+
+  if (result.source === "pricecharting_guide") {
+    return PRICECHARTING_GUIDE_MIN_CONFIDENCE;
+  }
 
   if (result.source === "todocoleccion") {
     return TODOCOLECCION_MIN_CONFIDENCE;
