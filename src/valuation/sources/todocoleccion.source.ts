@@ -489,6 +489,16 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
     return null;
   }
 
+  if (isUnreliableOfficialGuideCandidate(item, best.candidate)) {
+    console.log("🏺 Todocoleccion rejected unreliable official guide:", {
+      title: best.candidate.title,
+      price: best.candidate.price,
+      url: best.candidate.url
+    });
+
+    return null;
+  }
+
   return best.candidate;
 }
 
@@ -891,6 +901,50 @@ function romanToNumber(value: string): number | null {
   }
 
   return total > 0 ? total : null;
+}
+
+function isUnreliableOfficialGuideCandidate(
+  item: Item,
+  candidate: Candidate
+): boolean {
+  const category = normalizeCategory(item.category);
+  const platform = normalizePlatform(item.platform);
+  const title = normalizeSearchText(candidate.title);
+
+  if (category !== "guide") return false;
+  if (platform !== "officialguide" && platform !== "guide") return false;
+
+  const hasStrongOfficialSignal = hasAny(title, [
+    "piggyback",
+    "bradygames",
+    "future press",
+    "guia oficial",
+    "guía oficial",
+    "official guide",
+    "guia estrategia oficial",
+    "guía estrategia oficial",
+    "la guia de estrategia oficial",
+    "la guía de estrategia oficial"
+  ]);
+
+  const looksLikeMagazineOrLooseGuide = hasAny(title, [
+    "revista",
+    "hobby consolas",
+    "playmania",
+    "play mania",
+    "play2mania",
+    "play2 mania",
+    "guia playstation",
+    "guía playstation",
+    "guia completa del juego",
+    "guía completa del juego"
+  ]);
+
+  if (!hasStrongOfficialSignal) return true;
+  if (looksLikeMagazineOrLooseGuide) return true;
+  if (candidate.price != null && candidate.price < 12) return true;
+
+  return false;
 }
 
 function hasAny(value: string, tokens: string[]): boolean {
