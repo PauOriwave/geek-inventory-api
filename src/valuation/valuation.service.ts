@@ -21,6 +21,7 @@ import { getFunkoEuropePrice } from "./sources/funko-europe.source";
 import { getPriceChartingFunkoPrice } from "./sources/pricecharting-funko.source";
 import { getKurogamiMerchPrice } from "./sources/kurogami-merch.source";
 import { getNinNinGamePrice } from "./sources/nin-nin-game.source";
+import { getTodocoleccionPrice } from "./sources/todocoleccion.source";
 
 import {
   ScraperAttemptLog,
@@ -47,6 +48,7 @@ const TCG_DUNGEON_MARVELS_MIN_CONFIDENCE = 0.8;
 const MERCH_MIN_CONFIDENCE = 0.65;
 const DUNGEON_MARVELS_MERCH_MIN_CONFIDENCE = 0.6;
 const NIN_NIN_GAME_MERCH_MIN_CONFIDENCE = 0.55;
+const TODOCOLECCION_MIN_CONFIDENCE = 0.45;
 
 const CACHE_TTL_HOURS = 24;
 
@@ -92,6 +94,12 @@ const sources: SourceDefinition[] = [
     priority: 86,
     categories: ["comic", "book", "guide", "magazine"],
     handler: getNormaComicsPrice
+  },
+  {
+    name: "todocoleccion",
+    priority: 93,
+    categories: ["guide", "magazine", "merch"],
+    handler: getTodocoleccionPrice
   },
   {
     name: "juegos_mesa_redonda",
@@ -212,6 +220,7 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
   if (category === "merch") {
     return categorySources.filter((source) =>
       [
+        "todocoleccion",
         "kurogami_merch",
         "nin_nin_game",
         "dungeon_marvels",
@@ -222,13 +231,23 @@ function getSourcesForItem(item: Item): SourceDefinition[] {
 
   if (category === "guide") {
     return categorySources.filter((source) =>
-      ["todos_tus_libros", "la_central", "norma_comics"].includes(source.name)
+      [
+        "todocoleccion",
+        "todos_tus_libros",
+        "la_central",
+        "norma_comics"
+      ].includes(source.name)
     );
   }
 
   if (category === "magazine") {
     return categorySources.filter((source) =>
-      ["todos_tus_libros", "la_central", "norma_comics"].includes(source.name)
+      [
+        "todocoleccion",
+        "todos_tus_libros",
+        "la_central",
+        "norma_comics"
+      ].includes(source.name)
     );
   }
 
@@ -322,6 +341,10 @@ function getMinimumConfidenceForResult(
   result: ScraperSourceResult
 ): number {
   const category = normalizeCategory(item.category);
+
+  if (result.source === "todocoleccion") {
+    return TODOCOLECCION_MIN_CONFIDENCE;
+  }
 
   if (category === "tcg" && result.source === "dungeon_marvels") {
     return TCG_DUNGEON_MARVELS_MIN_CONFIDENCE;
