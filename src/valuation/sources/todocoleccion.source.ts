@@ -353,6 +353,50 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
       score += 0.08;
     }
 
+    const category = normalizeCategory(item.category);
+
+    if (category === "guide") {
+      if (
+        hasAny(title, [
+          "guia oficial",
+          "guía oficial",
+          "official guide",
+          "piggyback",
+          "guia estrategia",
+          "guía estrategia",
+          "guia completa",
+          "guía completa",
+          "guia playstation",
+          "guía playstation"
+        ])
+      ) {
+        score += 0.22;
+      }
+
+      if (
+        hasAny(title, [
+          "argumental",
+          "novela",
+          "comic",
+          "cómic",
+          "manga"
+        ])
+      ) {
+        score -= 0.3;
+      }
+
+      if (
+        hasAny(title, [
+          "revista",
+          "magazine",
+          "playmania",
+          "hobby consolas"
+        ])
+      ) {
+        score -= 0.12;
+      }
+    }
+
     return {
       candidate,
       score
