@@ -44,6 +44,9 @@ type SourceDefinition = {
   handler: (item: Item) => Promise<ScraperSourceResult | null>;
 };
 
+type PriceRole = "market" | "historical" | "listing" | "retail" | "catalog";
+type LiquidityLevel = "low" | "medium" | "high";
+
 const MIN_CONFIDENCE_FOR_VALUATION = 0.5;
 const TCG_DUNGEON_MARVELS_MIN_CONFIDENCE = 0.8;
 const MERCH_MIN_CONFIDENCE = 0.65;
@@ -440,14 +443,204 @@ function getSourcePriority(sourceName: string): number {
   return source?.priority ?? 50;
 }
 
+function getResultPriceRole(result: ScraperSourceResult): PriceRole {
+  const metadataRole = result.metadata?.priceRole ?? result.metadata?.priceType;
+
+  if (
+    metadataRole === "market" ||
+    metadataRole === "historical" ||
+    metadataRole === "listing" ||
+    metadataRole === "retail" ||
+    metadataRole === "catalog"
+  ) {
+    return metadataRole;
+  }
+
+  if (
+    result.source === "pricecharting_videogame" ||
+    result.source === "pricecharting_comic" ||
+    result.source === "pricecharting_guide" ||
+    result.source === "pricecharting_funko" ||
+    result.source === "brickeconomy"
+  ) {
+    return "historical";
+  }
+
+  if (result.source === "todocoleccion") {
+    return "listing";
+  }
+
+  if (
+    result.source === "todos_tus_libros" ||
+    result.source === "la_central" ||
+    result.source === "norma_comics" ||
+    result.source === "funko_europe" ||
+    result.source === "kurogami_merch" ||
+    result.source === "nin_nin_game" ||
+    result.source === "dungeon_marvels" ||
+    result.source === "goblin_trader" ||
+    result.source === "juegos_mesa_redonda" ||
+    result.source === "dvd_store_spain"
+  ) {
+    return "retail";
+  }
+
+  return "market";
+}
+
+function getResultLiquidity(result: ScraperSourceResult): LiquidityLevel {
+  const metadataLiquidity = result.metadata?.liquidity;
+
+  if (
+    metadataLiquidity === "low" ||
+    metadataLiquidity === "medium" ||
+    metadataLiquidity === "high"
+  ) {
+    return metadataLiquidity;
+  }
+
+  if (
+    result.source === "pricecharting_guide" ||
+    result.source === "todocoleccion" ||
+    result.source === "brickeconomy"
+  ) {
+    return "low";
+  }
+
+  if (
+    result.source === "pricecharting_videogame" ||
+    result.source === "pricecharting_comic" ||
+    result.source === "pricecharting_funko" ||
+    result.source === "cardtrader" ||
+    result.source === "pokemon_tcg_api" ||
+    result.source === "tcgdex" ||
+    result.source === "scryfall"
+  ) {
+    return "medium";
+  }
+
+  return "medium";
+}
+
+function getSemanticSourceWeight(result: ScraperSourceResult): number {
+  const role = getResultPriceRole(result);
+  const liquidity = getResultLiquidity(result);
+
+  let weight = 1;
+
+  if (role === "market") weight *= 1;
+  if (role === "historical") weight *= 0.92;
+  if (role === "listing") weight *= 0.88;
+  if (role === "retail") weight *= 0.72;
+  if (role === "catalog") weight *= 0.45;
+
+  if (liquidity === "high") weight *= 1;
+  if (liquidity === "medium") weight *= 0.92;
+  if (liquidity === "low") weight *= 0.82;
+
+  if (result.source === "pricecharting_guide") {
+    weight *= 0.9;
+  }
+
+  if (result.source === "todocoleccion") {
+    weight *= 1.02;
+  }
+
+  return weight;
+}
+
+function getCurrencyPenalty(
+  result: ScraperSourceResult,
+  preferredCurrency: SupportedCurrency | null
+): number {
+  if (!preferredCurrency) return 1;
+  if (!result.currency) return 0.92;
+  if (result.currency === preferredCurrency) return 1;
+
+  return 0.85;
+}
+
+function getPreferredCurrency(
+  results: ScraperSourceResult[]
+): SupportedCurrency | null {
+  const counts = new Map<SupportedCurrency, number>();
+
+  for (const result of results) {
+    if (!result.currency) continue;
+
+    counts.set(
+      result.currency,
+      (counts.get(result.currency) ?? 0) + 1
+    );
+  }
+
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+
+  return sorted[0]?.[0] ?? results[0]?.currency ?? null;
+}
+
+function filterExtremeOutliers(
+  results: ScraperSourceResult[]
+): ScraperSourceResult[] {
+  if (results.length < 3) return results;
+
+  const sortedPrices = results
+    .map((result) => result.price)
+    .filter((price) => Number.isFinite(price) && price > 0)
+    .sort((a, b) => a - b);
+
+  if (sortedPrices.length < 3) return results;
+
+  const median = sortedPrices[Math.floor(sortedPrices.length / 2)];
+
+  if (!median || median <= 0) return results;
+
+  return results.filter((result) => {
+    const ratio = result.price / median;
+
+    if (ratio > 3.5 || ratio < 0.25) {
+      console.log("[valuation] Ignoring extreme outlier:", {
+        source: result.source,
+        price: result.price,
+        median,
+        ratio: Number(ratio.toFixed(2))
+      });
+
+      return false;
+    }
+
+    return true;
+  });
+}
+
 function calculateWeightedValuation(
   results: ScraperSourceResult[]
 ): ValuationResult | null {
-  const weightedResults = results.map((result) => {
-    const priority = getSourcePriority(result.source);
-    const weight = result.confidence * priority;
+  if (results.length === 0) return null;
 
-    return { result, weight };
+  const usableResults = filterExtremeOutliers(results);
+
+  if (usableResults.length === 0) return null;
+
+  const preferredCurrency = getPreferredCurrency(usableResults);
+
+  const weightedResults = usableResults.map((result) => {
+    const priority = getSourcePriority(result.source);
+    const semanticWeight = getSemanticSourceWeight(result);
+    const currencyPenalty = getCurrencyPenalty(result, preferredCurrency);
+
+    const weight =
+      result.confidence *
+      priority *
+      semanticWeight *
+      currencyPenalty;
+
+    return {
+      result,
+      weight,
+      role: getResultPriceRole(result),
+      liquidity: getResultLiquidity(result)
+    };
   });
 
   const totalWeight = weightedResults.reduce(
@@ -467,17 +660,49 @@ function calculateWeightedValuation(
     ...new Set(weightedResults.map((entry) => entry.result.source))
   ].join("+");
 
-  const avgConfidence =
-    weightedResults.reduce((acc, entry) => acc + entry.result.confidence, 0) /
-    weightedResults.length;
+  const weightedConfidence =
+    weightedResults.reduce(
+      (acc, entry) => acc + entry.result.confidence * entry.weight,
+      0
+    ) / totalWeight;
 
-  const currency = weightedResults[0]?.result.currency ?? null;
+  const sourceCountBonus = Math.min(0.08, (weightedResults.length - 1) * 0.03);
+
+  const lowLiquidityPenalty = weightedResults.every(
+    (entry) => entry.liquidity === "low"
+  )
+    ? 0.04
+    : 0;
+
+  const singleSourcePenalty =
+    weightedResults.length === 1 ? 0.03 : 0;
+
+  const confidence = Math.min(
+    0.95,
+    Math.max(
+      0.2,
+      weightedConfidence + sourceCountBonus - lowLiquidityPenalty - singleSourcePenalty
+    )
+  );
+
+  console.log(
+    "[valuation] weighted results:",
+    weightedResults.map((entry) => ({
+      source: entry.result.source,
+      price: entry.result.price,
+      currency: entry.result.currency ?? null,
+      confidence: entry.result.confidence,
+      role: entry.role,
+      liquidity: entry.liquidity,
+      weight: Number(entry.weight.toFixed(2))
+    }))
+  );
 
   return {
     price: Number(weightedPrice.toFixed(2)),
-    currency,
+    currency: preferredCurrency,
     source: mergedSources,
-    confidence: Number(Math.min(0.95, avgConfidence).toFixed(2))
+    confidence: Number(confidence.toFixed(2))
   };
 }
 
