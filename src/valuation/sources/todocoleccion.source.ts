@@ -162,7 +162,24 @@ function buildQueries(item: Item): string[] {
   if (category === "magazine") {
     queries.add(`${raw} revista`);
     queries.add(`${raw} magazine`);
-    queries.add(`${raw} hobby consolas`);
+
+    if (!normalized.includes("hobby consolas")) {
+      queries.add(`${raw} hobby consolas`);
+    }
+
+    const issue = extractMagazineIssue(raw);
+
+    if (issue) {
+      const magazineBase = removeMagazineIssueWords(raw);
+
+      if (magazineBase) {
+        queries.add(`${magazineBase} ${issue}`);
+        queries.add(`${magazineBase} nº ${issue}`);
+        queries.add(`${magazineBase} numero ${issue}`);
+        queries.add(`${magazineBase} número ${issue}`);
+        queries.add(`${magazineBase} num ${issue}`);
+      }
+    }
   }
 
   if (category === "merch") {
@@ -206,7 +223,7 @@ function buildQueries(item: Item): string[] {
     .map((query) => query.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
-    .slice(0, 12);
+    .slice(0, 14);
 }
 
 function extractCandidates(html: string): Candidate[] {
@@ -326,16 +343,6 @@ function filterCandidates(
   return candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
 
-    const tokenMatches = tokens.filter((token) =>
-      title.includes(token)
-    );
-
-    const ratio = tokenMatches.length / tokens.length;
-
-    if (ratio < 0.65) {
-      return false;
-    }
-
     if (hasStrongNegativeSignals(item, title)) {
       return false;
     }
@@ -349,6 +356,26 @@ function filterCandidates(
     }
 
     if (!passesIdentityRequirements(item, title)) {
+      return false;
+    }
+
+    if (hasMagazineIssueConflict(item, title)) {
+      return false;
+    }
+
+    const category = normalizeCategory(item.category);
+
+    if (category === "magazine") {
+      return passesMagazineTokenValidation(item, title);
+    }
+
+    const tokenMatches = tokens.filter((token) =>
+      title.includes(token)
+    );
+
+    const ratio = tokenMatches.length / tokens.length;
+
+    if (ratio < 0.65) {
       return false;
     }
 
@@ -394,6 +421,13 @@ function pickBestCandidate(
       reasons.push(`category-boost:${categoryBoost.toFixed(2)}`);
     }
 
+    const magazineBoost = getMagazineIdentityBoost(item, title);
+
+    if (magazineBoost > 0) {
+      score += magazineBoost;
+      reasons.push(`magazine-boost:${magazineBoost.toFixed(2)}`);
+    }
+
     if (candidate.price && candidate.price > 0) {
       score += 0.08;
       reasons.push("has-price");
@@ -407,6 +441,11 @@ function pickBestCandidate(
     if (hasEditionConflict(wanted, title)) {
       score -= 0.45;
       reasons.push("edition-conflict");
+    }
+
+    if (hasMagazineIssueConflict(item, title)) {
+      score -= 1.2;
+      reasons.push("magazine-issue-conflict");
     }
 
     if (hasWeakGuideSignals(item, title)) {
@@ -508,6 +547,10 @@ async function buildResult(
     return null;
   }
 
+  if (hasMagazineIssueConflict(item, normalizedMatchedTitle)) {
+    return null;
+  }
+
   const confidence = computeConfidence(
     item,
     matchedTitle
@@ -528,7 +571,9 @@ async function buildResult(
       category: item.category,
       platform: item.platform ?? null,
       region: item.region ?? null,
-      identityRequirements: extractIdentityRequirements(item)
+      magazineIssue: extractMagazineIssue(item.name),
+      priceRole: "listing",
+      liquidity: "low"
     }
   };
 }
@@ -646,6 +691,8 @@ function getImportantTokens(
   normalizedText: string,
   item: Item
 ): string[] {
+  const category = normalizeCategory(item.category);
+
   const stopWords = new Set([
     "the",
     "and",
@@ -664,6 +711,16 @@ function getImportantTokens(
     "magazine",
     "revista"
   ]);
+
+  if (category === "magazine") {
+    stopWords.add("numero");
+    stopWords.add("número");
+    stopWords.add("num");
+    stopWords.add("n");
+    stopWords.add("nº");
+    stopWords.add("ano");
+    stopWords.add("año");
+  }
 
   const platformWords = getPlatformWords(item.platform);
 
@@ -714,12 +771,7 @@ function passesCategoryValidation(
   }
 
   if (category === "magazine") {
-    return hasAny(title, [
-      "revista",
-      "magazine",
-      "hobby",
-      "consolas"
-    ]);
+    return hasMagazineSignals(title);
   }
 
   if (category === "merch") {
@@ -758,6 +810,79 @@ function passesCategoryValidation(
   return true;
 }
 
+function passesMagazineTokenValidation(
+  item: Item,
+  normalizedTitle: string
+): boolean {
+  const wanted = normalizeSearchText(item.name);
+  const wantedBase = getMagazineBaseTokens(wanted);
+  const candidateBase = getMagazineBaseTokens(normalizedTitle);
+
+  if (wantedBase.length === 0) {
+    return false;
+  }
+
+  const baseMatches = wantedBase.filter((token) =>
+    candidateBase.includes(token)
+  );
+
+  const baseRatio = baseMatches.length / wantedBase.length;
+
+  if (baseRatio < 0.8) {
+    return false;
+  }
+
+  const wantedIssue = extractMagazineIssue(item.name);
+
+  if (wantedIssue) {
+    const candidateIssue = extractMagazineIssue(normalizedTitle);
+
+    if (!candidateIssue) {
+      return false;
+    }
+
+    return candidateIssue === wantedIssue;
+  }
+
+  return true;
+}
+
+function getMagazineBaseTokens(value: string): string[] {
+  const normalized = normalizeSearchText(value);
+
+  const stopWords = new Set([
+    "revista",
+    "magazine",
+    "numero",
+    "número",
+    "num",
+    "n",
+    "nº",
+    "no",
+    "ano",
+    "año",
+    "vol",
+    "volumen",
+    "volume",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "0"
+  ]);
+
+  return normalized
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => !stopWords.has(token))
+    .filter((token) => !/^\d+$/.test(token));
+}
+
 function hasStrongNegativeSignals(
   item: Item,
   title: string
@@ -787,6 +912,29 @@ function hasStrongNegativeSignals(
       "faltan instrucciones",
       "sin guia",
       "sin guía"
+    ])
+  ) {
+    return true;
+  }
+
+  if (
+    category === "magazine" &&
+    hasAny(title, [
+      "vhs",
+      "dvd",
+      "cd ",
+      "soundtrack",
+      "bso",
+      "llavero",
+      "figura",
+      "muñeco",
+      "videojuego",
+      "solo disco",
+      "juego ps",
+      "playstation 2 pal",
+      "ps2 pal",
+      "xbox",
+      "nintendo ds"
     ])
   ) {
     return true;
@@ -826,16 +974,16 @@ function hasMagazineSignals(
     "revista",
     "magazine",
     "hobby consolas",
+    "hobbyconsolas",
     "playmania",
     "play mania",
     "play2mania",
     "play2 mania",
     "planet station",
-    "guias nº",
-    "guías nº",
-    "nº",
-    "numero",
-    "número"
+    "micro hobby",
+    "todo sega",
+    "juegos y cia",
+    "juegos y cía"
   ]);
 }
 
@@ -883,12 +1031,7 @@ function getCategoryBoost(
 
   if (
     category === "magazine" &&
-    hasAny(normalizedTitle, [
-      "revista",
-      "magazine",
-      "hobby",
-      "consolas"
-    ])
+    hasMagazineSignals(normalizedTitle)
   ) {
     return 0.2;
   }
@@ -968,6 +1111,11 @@ function computeConfidence(
   );
 
   confidence += getIdentityBoost(
+    item,
+    matched
+  );
+
+  confidence += getMagazineIdentityBoost(
     item,
     matched
   );
@@ -1118,6 +1266,135 @@ function hasPremiumGuideSignal(title: string): boolean {
     "guía de estrategia oficial",
     "estrategia oficial"
   ]);
+}
+
+function getMagazineIdentityBoost(
+  item: Item,
+  normalizedTitle: string
+): number {
+  const category = normalizeCategory(item.category);
+
+  if (category !== "magazine") {
+    return 0;
+  }
+
+  const wantedIssue = extractMagazineIssue(item.name);
+  const candidateIssue = extractMagazineIssue(normalizedTitle);
+
+  let boost = 0;
+
+  if (wantedIssue && candidateIssue && wantedIssue === candidateIssue) {
+    boost += 0.35;
+  }
+
+  const wantedBase = getMagazineBaseTokens(item.name);
+  const candidateBase = getMagazineBaseTokens(normalizedTitle);
+
+  const baseMatches = wantedBase.filter((token) =>
+    candidateBase.includes(token)
+  );
+
+  if (wantedBase.length > 0 && baseMatches.length === wantedBase.length) {
+    boost += 0.25;
+  }
+
+  if (hasMagazineSignals(normalizedTitle)) {
+    boost += 0.12;
+  }
+
+  return Math.min(0.55, boost);
+}
+
+function hasMagazineIssueConflict(
+  item: Item,
+  normalizedTitle: string
+): boolean {
+  const category = normalizeCategory(item.category);
+
+  if (category !== "magazine") {
+    return false;
+  }
+
+  const wantedIssue = extractMagazineIssue(item.name);
+
+  if (!wantedIssue) {
+    return false;
+  }
+
+  const candidateIssue = extractMagazineIssue(normalizedTitle);
+
+  if (!candidateIssue) {
+    return true;
+  }
+
+  return wantedIssue !== candidateIssue;
+}
+
+function extractMagazineIssue(value: string): string | null {
+  const normalized = normalizeSearchText(value)
+    .replace(/n\s*º/g, "nº")
+    .replace(/n\s*o\s/g, " numero ")
+    .replace(/num\./g, "num ")
+    .replace(/n\./g, "num ")
+    .replace(/nº/g, " numero ")
+    .replace(/n°/g, " numero ")
+    .replace(/no\./g, " numero ")
+    .replace(/\baño\b/g, "ano")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const explicit = normalized.match(
+    /\b(?:numero|num|n)\s*(\d{1,4})\b/
+  );
+
+  if (explicit?.[1]) {
+    return normalizeIssueNumber(explicit[1]);
+  }
+
+  const hobbyConsolasDirect = normalized.match(
+    /\bhobby\s*consolas\s+(\d{1,4})\b/
+  );
+
+  if (hobbyConsolasDirect?.[1]) {
+    return normalizeIssueNumber(hobbyConsolasDirect[1]);
+  }
+
+  const hobbyConsolasWithRomanYear = normalized.match(
+    /\bhobby\s*consolas\s+ano\s+[ivxlcdm]+\s+(\d{1,4})\b/
+  );
+
+  if (hobbyConsolasWithRomanYear?.[1]) {
+    return normalizeIssueNumber(hobbyConsolasWithRomanYear[1]);
+  }
+
+  const revistaDirect = normalized.match(
+    /\brevista\s+hobby\s*consolas\s+(\d{1,4})\b/
+  );
+
+  if (revistaDirect?.[1]) {
+    return normalizeIssueNumber(revistaDirect[1]);
+  }
+
+  return null;
+}
+
+function normalizeIssueNumber(value: string): string {
+  const numeric = Number(value);
+
+  if (Number.isFinite(numeric)) {
+    return String(numeric);
+  }
+
+  return String(value).replace(/^0+/, "") || value;
+}
+
+function removeMagazineIssueWords(value: string): string {
+  return normalizeSearchText(value)
+    .replace(/\b(?:numero|número|num|n|nº|n°)\s*\d{1,4}\b/g, "")
+    .replace(/\bhobby\s*consolas\s+\d{1,4}\b/g, "hobby consolas")
+    .replace(/\brevista\s+hobby\s*consolas\s+\d{1,4}\b/g, "revista hobby consolas")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isLikelyCorrectEdition(
@@ -1440,12 +1717,27 @@ function normalizePlatform(
     return "officialguide";
   }
 
+  if (normalized.includes("strategyguide")) {
+    return "guide";
+  }
+
   if (normalized.includes("guide")) {
     return "guide";
   }
 
   if (normalized.includes("guia")) {
     return "guide";
+  }
+
+  if (normalized.includes("videogamemagazine")) {
+    return "magazine";
+  }
+
+  if (
+    normalized.includes("magazine") ||
+    normalized.includes("revista")
+  ) {
+    return "magazine";
   }
 
   if (normalized.includes("tazo")) {
@@ -1475,13 +1767,6 @@ function normalizePlatform(
     normalized.includes("gashapon")
   ) {
     return "gachapon";
-  }
-
-  if (
-    normalized.includes("magazine") ||
-    normalized.includes("revista")
-  ) {
-    return "magazine";
   }
 
   return normalized;
@@ -1619,6 +1904,8 @@ function normalizeSearchText(
   value: string
 ): string {
   return normalizeText(value)
+    .replace(/nº/g, "nº")
+    .replace(/n°/g, "n°")
     .replace(/\s+/g, " ")
     .trim();
 }
