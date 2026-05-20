@@ -153,6 +153,10 @@ function buildQueries(item: Item): string[] {
     if (!normalized.includes("bradygames")) {
       queries.add(`${raw} bradygames`);
     }
+
+    if (!normalized.includes("future press")) {
+      queries.add(`${raw} future press`);
+    }
   }
 
   if (category === "magazine") {
@@ -202,7 +206,7 @@ function buildQueries(item: Item): string[] {
     .map((query) => query.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
-    .slice(0, 10);
+    .slice(0, 12);
 }
 
 function extractCandidates(html: string): Candidate[] {
@@ -344,6 +348,10 @@ function filterCandidates(
       return false;
     }
 
+    if (!passesIdentityRequirements(item, title)) {
+      return false;
+    }
+
     return true;
   });
 }
@@ -370,6 +378,13 @@ function pickBestCandidate(
     if (title.includes(wanted)) {
       score += 0.25;
       reasons.push("full-title-match");
+    }
+
+    const identityBoost = getIdentityBoost(item, title);
+
+    if (identityBoost > 0) {
+      score += identityBoost;
+      reasons.push(`identity-boost:${identityBoost.toFixed(2)}`);
     }
 
     const categoryBoost = getCategoryBoost(item, title);
@@ -415,7 +430,8 @@ function pickBestCandidate(
     if (
       normalizeCategory(item.category) === "guide" &&
       candidate.price != null &&
-      candidate.price < 12
+      candidate.price < 12 &&
+      !hasPremiumGuideSignal(title)
     ) {
       score -= 0.3;
       reasons.push("suspicious-low-guide-price");
@@ -482,6 +498,16 @@ async function buildResult(
     detail?.title ||
     candidate.title;
 
+  const normalizedMatchedTitle = normalizeSearchText(matchedTitle);
+
+  if (hasEditionConflict(normalizeSearchText(item.name), normalizedMatchedTitle)) {
+    return null;
+  }
+
+  if (!passesIdentityRequirements(item, normalizedMatchedTitle)) {
+    return null;
+  }
+
   const confidence = computeConfidence(
     item,
     matchedTitle
@@ -501,7 +527,8 @@ async function buildResult(
       url: candidate.url,
       category: item.category,
       platform: item.platform ?? null,
-      region: item.region ?? null
+      region: item.region ?? null,
+      identityRequirements: extractIdentityRequirements(item)
     }
   };
 }
@@ -659,6 +686,21 @@ function passesCategoryValidation(
   const platform = normalizePlatform(item.platform);
 
   if (category === "guide") {
+    if (platform === "officialguide" || platform === "guide") {
+      return hasAny(title, [
+        "guide",
+        "guia",
+        "guía",
+        "piggyback",
+        "official",
+        "oficial",
+        "strategy",
+        "estrategia",
+        "bradygames",
+        "future press"
+      ]);
+    }
+
     return hasAny(title, [
       "guide",
       "guia",
@@ -666,7 +708,8 @@ function passesCategoryValidation(
       "piggyback",
       "official",
       "oficial",
-      "strategy"
+      "strategy",
+      "estrategia"
     ]);
   }
 
@@ -730,7 +773,20 @@ function hasStrongNegativeSignals(
       "resumen",
       "argumental",
       "poster",
-      "posterbook"
+      "posterbook",
+      "llavero",
+      "figura",
+      "muñeco",
+      "bso",
+      "soundtrack",
+      "dvd",
+      "cd ",
+      "juego ps",
+      "videojuego",
+      "solo disco",
+      "faltan instrucciones",
+      "sin guia",
+      "sin guía"
     ])
   ) {
     return true;
@@ -755,6 +811,9 @@ function hasWeakGuideSignals(
     "guia oficial",
     "guía oficial",
     "strategy guide",
+    "guia estrategia",
+    "guía estrategia",
+    "estrategia oficial",
     "bradygames",
     "future press"
   ]);
@@ -768,7 +827,15 @@ function hasMagazineSignals(
     "magazine",
     "hobby consolas",
     "playmania",
-    "play mania"
+    "play mania",
+    "play2mania",
+    "play2 mania",
+    "planet station",
+    "guias nº",
+    "guías nº",
+    "nº",
+    "numero",
+    "número"
   ]);
 }
 
@@ -780,7 +847,10 @@ function hasNarrativeSignals(
     "comic",
     "cómic",
     "manga",
-    "argumental"
+    "argumental",
+    "visual arts",
+    "arte de",
+    "leyenda"
   ]);
 }
 
@@ -791,18 +861,24 @@ function getCategoryBoost(
   const category = normalizeCategory(item.category);
   const platform = normalizePlatform(item.platform);
 
-  if (
-    category === "guide" &&
-    hasAny(normalizedTitle, [
-      "guide",
-      "guia",
-      "guía",
-      "piggyback",
-      "oficial",
-      "official"
-    ])
-  ) {
-    return 0.2;
+  if (category === "guide") {
+    if (hasPremiumGuideSignal(normalizedTitle)) {
+      return 0.28;
+    }
+
+    if (
+      hasAny(normalizedTitle, [
+        "guide",
+        "guia",
+        "guía",
+        "oficial",
+        "official",
+        "strategy",
+        "estrategia"
+      ])
+    ) {
+      return 0.18;
+    }
   }
 
   if (
@@ -836,6 +912,26 @@ function getCategoryBoost(
       ])
     ) {
       return 0.2;
+    }
+
+    if (
+      platform === "album" &&
+      hasAny(normalizedTitle, [
+        "album",
+        "álbum"
+      ])
+    ) {
+      return 0.18;
+    }
+
+    if (
+      platform === "gachapon" &&
+      hasAny(normalizedTitle, [
+        "gachapon",
+        "gashapon"
+      ])
+    ) {
+      return 0.18;
     }
   }
 
@@ -871,12 +967,157 @@ function computeConfidence(
     matched
   );
 
+  confidence += getIdentityBoost(
+    item,
+    matched
+  );
+
   return Number(
     Math.max(
       0.25,
       Math.min(0.92, confidence)
     ).toFixed(2)
   );
+}
+
+function passesIdentityRequirements(
+  item: Item,
+  normalizedTitle: string
+): boolean {
+  const category = normalizeCategory(item.category);
+
+  if (category !== "guide") {
+    return true;
+  }
+
+  const requirements = extractIdentityRequirements(item);
+
+  if (requirements.length === 0) {
+    return true;
+  }
+
+  for (const requirement of requirements) {
+    if (!matchesIdentityRequirement(normalizedTitle, requirement)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function extractIdentityRequirements(item: Item): string[] {
+  const category = normalizeCategory(item.category);
+
+  if (category !== "guide") {
+    return [];
+  }
+
+  const wanted = normalizeSearchText(
+    `${item.name} ${item.platform ?? ""}`
+  );
+
+  const requirements = new Set<string>();
+
+  if (wanted.includes("piggyback")) {
+    requirements.add("piggyback");
+  }
+
+  if (wanted.includes("bradygames")) {
+    requirements.add("bradygames");
+  }
+
+  if (wanted.includes("future press")) {
+    requirements.add("future_press");
+  }
+
+  if (
+    hasAny(wanted, [
+      "guia oficial",
+      "guía oficial",
+      "official guide",
+      "guia de estrategia oficial",
+      "guía de estrategia oficial",
+      "official strategy guide",
+      "estrategia oficial"
+    ])
+  ) {
+    requirements.add("official_guide");
+  }
+
+  return [...requirements];
+}
+
+function matchesIdentityRequirement(
+  normalizedTitle: string,
+  requirement: string
+): boolean {
+  if (requirement === "piggyback") {
+    return normalizedTitle.includes("piggyback");
+  }
+
+  if (requirement === "bradygames") {
+    return normalizedTitle.includes("bradygames");
+  }
+
+  if (requirement === "future_press") {
+    return normalizedTitle.includes("future press");
+  }
+
+  if (requirement === "official_guide") {
+    return hasAny(normalizedTitle, [
+      "guia oficial",
+      "guía oficial",
+      "official guide",
+      "guia estrategia oficial",
+      "guía estrategia oficial",
+      "guia de estrategia oficial",
+      "guía de estrategia oficial",
+      "la guia de estrategia oficial",
+      "la guía de estrategia oficial",
+      "official strategy guide",
+      "estrategia oficial"
+    ]);
+  }
+
+  return true;
+}
+
+function getIdentityBoost(
+  item: Item,
+  normalizedTitle: string
+): number {
+  const requirements = extractIdentityRequirements(item);
+
+  if (requirements.length === 0) {
+    return 0;
+  }
+
+  const matches = requirements.filter((requirement) =>
+    matchesIdentityRequirement(normalizedTitle, requirement)
+  );
+
+  if (matches.length === 0) {
+    return 0;
+  }
+
+  return Math.min(0.25, matches.length * 0.12);
+}
+
+function hasPremiumGuideSignal(title: string): boolean {
+  return hasAny(title, [
+    "piggyback",
+    "bradygames",
+    "future press",
+    "official guide",
+    "guia oficial",
+    "guía oficial",
+    "strategy guide",
+    "guia estrategia oficial",
+    "guía estrategia oficial",
+    "guia de estrategia oficial",
+    "guía de estrategia oficial",
+    "estrategia oficial"
+  ]);
 }
 
 function isLikelyCorrectEdition(
@@ -1140,23 +1381,24 @@ function isUnreliableOfficialGuideCandidate(
   const title =
     normalizeSearchText(candidate.title);
 
-  const hasStrongOfficialSignal = hasAny(title, [
-    "piggyback",
-    "bradygames",
-    "future press",
-    "official guide",
-    "guia oficial",
-    "guía oficial",
-    "strategy guide"
-  ]);
+  const hasStrongOfficialSignal = hasPremiumGuideSignal(title);
 
   if (!hasStrongOfficialSignal) {
     return true;
   }
 
+  const requirements = extractIdentityRequirements(item);
+
+  if (requirements.length > 0 && !passesIdentityRequirements(item, title)) {
+    return true;
+  }
+
   if (
     candidate.price != null &&
-    candidate.price < 12
+    candidate.price < 12 &&
+    !title.includes("piggyback") &&
+    !title.includes("bradygames") &&
+    !title.includes("future press")
   ) {
     return true;
   }
