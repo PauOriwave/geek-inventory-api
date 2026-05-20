@@ -41,9 +41,7 @@ export async function getTodocoleccionPrice(
 
   const category = normalizeCategory(item.category);
 
-  if (!SUPPORTED_CATEGORIES.has(category)) {
-    return null;
-  }
+  if (!SUPPORTED_CATEGORIES.has(category)) return null;
 
   const queries = buildQueries(item);
 
@@ -150,6 +148,8 @@ function buildQueries(item: Item): string[] {
         queries.add(`${magazineBase} numero ${issue}`);
         queries.add(`${magazineBase} número ${issue}`);
         queries.add(`${magazineBase} num ${issue}`);
+        queries.add(`revista ${magazineBase} nº ${issue}`);
+        queries.add(`revista ${magazineBase} numero ${issue}`);
       }
     }
   }
@@ -187,7 +187,7 @@ function buildQueries(item: Item): string[] {
     .map((query) => query.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
-    .slice(0, 14);
+    .slice(0, 16);
 }
 
 function extractCandidates(html: string): Candidate[] {
@@ -300,6 +300,10 @@ function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
     if (!passesCategoryValidation(item, title)) return false;
     if (hasDisallowedMagazineVariant(item, title)) return false;
 
+    if (category === "magazine" && !isMainMagazineCandidate(item, title)) {
+      return false;
+    }
+
     if (category !== "magazine" && hasEditionConflict(wanted, title)) {
       return false;
     }
@@ -318,7 +322,10 @@ function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
   });
 }
 
-function pickBestCandidate(item: Item, candidates: Candidate[]): ScoredCandidate | null {
+function pickBestCandidate(
+  item: Item,
+  candidates: Candidate[]
+): ScoredCandidate | null {
   if (candidates.length === 0) return null;
 
   const wanted = normalizeSearchText(item.name);
@@ -358,6 +365,11 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): ScoredCandidate
       reasons.push(`magazine-boost:${magazineBoost.toFixed(2)}`);
     }
 
+    if (isMainMagazineCandidate(item, title)) {
+      score += 0.35;
+      reasons.push("main-magazine-match");
+    }
+
     if (candidate.price && candidate.price > 0) {
       score += 0.08;
       reasons.push("has-price");
@@ -394,7 +406,7 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): ScoredCandidate
     }
 
     if (category === "magazine" && hasMagazineSupplementSignals(title)) {
-      score -= 0.35;
+      score -= 0.45;
       reasons.push("magazine-supplement-signal");
     }
 
@@ -463,6 +475,10 @@ async function buildResult(
   const category = normalizeCategory(item.category);
 
   if (hasDisallowedMagazineVariant(item, normalizedMatchedTitle)) {
+    return null;
+  }
+
+  if (category === "magazine" && !isMainMagazineCandidate(item, normalizedMatchedTitle)) {
     return null;
   }
 
@@ -748,6 +764,36 @@ function passesMagazineBrandValidation(wanted: string, candidate: string): boole
 
   if (wanted.includes("playmania") || wanted.includes("play mania")) {
     return candidate.includes("playmania") || candidate.includes("play mania");
+  }
+
+  return true;
+}
+
+function isMainMagazineCandidate(item: Item, title: string): boolean {
+  const category = normalizeCategory(item.category);
+
+  if (category !== "magazine") return true;
+
+  const wanted = normalizeSearchText(item.name);
+  const candidate = normalizeSearchText(title);
+
+  if (hasDisallowedMagazineVariant(item, candidate)) return false;
+
+  if (!passesMagazineBrandValidation(wanted, candidate)) return false;
+
+  const wantedIssue = extractMagazineIssue(wanted);
+  const candidateIssue = extractMagazineIssue(candidate);
+
+  if (wantedIssue && candidateIssue !== wantedIssue) return false;
+
+  if (wanted.includes("hobby consolas")) {
+    const hasMainMagazinePattern =
+      /\brevista\s+hobby\s*consolas\b/.test(candidate) ||
+      /\bhobby\s*consolas\s+(?:n|numero|num|nº|n°)\s*\d{1,4}\b/.test(candidate) ||
+      /\bhobbyconsolas\s+revista\s+(?:n|numero|num|nº|n°)?\s*\d{1,4}\b/.test(candidate) ||
+      /\bhobby\s*consolas\s+ano\s+[ivxlcdm]+\s+(?:n|numero|num|nº|n°)?\s*\d{1,4}\b/.test(candidate);
+
+    if (!hasMainMagazinePattern) return false;
   }
 
   return true;
