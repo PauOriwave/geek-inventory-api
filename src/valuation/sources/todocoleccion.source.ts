@@ -15,9 +15,18 @@ type Candidate = {
   url: string;
 };
 
+type ScoredCandidate = {
+  candidate: Candidate;
+  score: number;
+  reasons: string[];
+};
+
 const BASE_URL = "https://www.todocoleccion.net";
+
 const REQUEST_TIMEOUT_MS = 12000;
 const DIRECT_DETAIL_TIMEOUT_MS = 6000;
+
+const MIN_ACCEPTED_SCORE = 0.5;
 
 const SUPPORTED_CATEGORIES = new Set([
   "guide",
@@ -51,9 +60,8 @@ export async function getTodocoleccionPrice(
       console.log("🏺 Todocoleccion searching:", url);
 
       const html = await fetchHtml(url);
-      if (!html) continue;
 
-      console.log("🏺 Todocoleccion html length:", html.length);
+      if (!html) continue;
 
       const candidates = extractCandidates(html);
 
@@ -70,7 +78,7 @@ export async function getTodocoleccionPrice(
 
       console.log(
         "🏺 Todocoleccion filtered:",
-        filtered.map((candidate) => ({
+        filtered.slice(0, 20).map((candidate) => ({
           title: candidate.title,
           price: candidate.price,
           url: candidate.url
@@ -80,12 +88,28 @@ export async function getTodocoleccionPrice(
       const best = pickBestCandidate(item, filtered);
 
       if (!best) {
-        console.log("🏺 Todocoleccion no match:", query);
+        console.log("🏺 Todocoleccion no reliable match:", {
+          query
+        });
+
         continue;
       }
 
-      const result = await buildResult(item, best, query);
-      if (result) return result;
+      console.log("🏺 Todocoleccion best candidate:", {
+        title: best.candidate.title,
+        score: Number(best.score.toFixed(2)),
+        reasons: best.reasons
+      });
+
+      const result = await buildResult(
+        item,
+        best.candidate,
+        query
+      );
+
+      if (result) {
+        return result;
+      }
     }
   }
 
@@ -103,7 +127,9 @@ function buildSearchUrls(query: string): string[] {
 
 function buildQueries(item: Item): string[] {
   const raw = clean(item.name);
+
   const normalized = normalizeSearchText(raw);
+
   const category = normalizeCategory(item.category);
   const platform = normalizePlatform(item.platform);
 
@@ -114,20 +140,25 @@ function buildQueries(item: Item): string[] {
   if (category === "guide") {
     queries.add(`${raw} guia`);
     queries.add(`${raw} guía`);
+
     queries.add(`${raw} guia oficial`);
     queries.add(`${raw} guía oficial`);
 
+    queries.add(`${raw} strategy guide`);
+
     if (!normalized.includes("piggyback")) {
       queries.add(`${raw} piggyback`);
-      queries.add(`${raw} guia piggyback`);
-      queries.add(`${raw} guía piggyback`);
+    }
+
+    if (!normalized.includes("bradygames")) {
+      queries.add(`${raw} bradygames`);
     }
   }
 
   if (category === "magazine") {
     queries.add(`${raw} revista`);
-    queries.add(`${raw} hobby consolas`);
     queries.add(`${raw} magazine`);
+    queries.add(`${raw} hobby consolas`);
   }
 
   if (category === "merch") {
@@ -140,7 +171,6 @@ function buildQueries(item: Item): string[] {
       queries.add(`${raw} stack`);
       queries.add(`${raw} stacks`);
       queries.add(`${raw} imanes`);
-      queries.add(`${raw} pokemon stacks`);
     }
 
     if (platform === "album") {
@@ -177,6 +207,7 @@ function buildQueries(item: Item): string[] {
 
 function extractCandidates(html: string): Candidate[] {
   const $ = cheerio.load(html);
+
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
 
@@ -216,6 +247,7 @@ function extractCandidates(html: string): Candidate[] {
 
   $("a[href]").each((_, el) => {
     const link = $(el);
+
     const href = link.attr("href") || "";
     const url = absolutize(href);
 
@@ -255,12 +287,15 @@ function addCandidate(input: {
   seen: Set<string>;
 }) {
   const url = absolutize(input.href);
+
   const title = clean(input.title);
 
   if (!title || !url) return;
+
   if (!looksLikeProductUrl(url)) return;
 
   const key = `${normalizeText(title)}|${url}`;
+
   if (input.seen.has(key)) return;
 
   input.seen.add(key);
@@ -272,202 +307,117 @@ function addCandidate(input: {
   });
 }
 
-function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
+function filterCandidates(
+  item: Item,
+  candidates: Candidate[]
+): Candidate[] {
   const wanted = normalizeSearchText(item.name);
+
   const tokens = getImportantTokens(wanted, item);
 
-  if (tokens.length === 0) return [];
+  if (tokens.length === 0) {
+    return [];
+  }
 
   return candidates.filter((candidate) => {
     const title = normalizeSearchText(candidate.title);
 
-    const matchedTokens = tokens.filter((token) => title.includes(token));
-    const ratio = matchedTokens.length / tokens.length;
+    const tokenMatches = tokens.filter((token) =>
+      title.includes(token)
+    );
 
-    if (ratio < 0.65) return false;
+    const ratio = tokenMatches.length / tokens.length;
 
-    const category = normalizeCategory(item.category);
-    const platform = normalizePlatform(item.platform);
-
-    if (category === "guide") {
-      return hasAny(title, [
-        "guia",
-        "guía",
-        "guide",
-        "piggyback",
-        "oficial",
-        "official"
-      ]);
+    if (ratio < 0.65) {
+      return false;
     }
 
-    if (category === "magazine") {
-      return hasAny(title, [
-        "revista",
-        "magazine",
-        "hobby",
-        "consolas",
-        "nintendo",
-        "playstation"
-      ]);
+    if (hasStrongNegativeSignals(item, title)) {
+      return false;
     }
 
-    if (category === "merch") {
-      if (platform === "tazo") {
-        return hasAny(title, ["tazo", "tazos"]);
-      }
-
-      if (platform === "stack") {
-        return hasAny(title, ["stack", "stacks", "iman", "imán", "imanes"]);
-      }
-
-      if (platform === "album") {
-        return hasAny(title, ["album", "álbum"]);
-      }
-
-      if (platform === "gachapon") {
-        return hasAny(title, ["gachapon", "gashapon"]);
-      }
+    if (!passesCategoryValidation(item, title)) {
+      return false;
     }
 
     return true;
   });
 }
 
-function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | null {
-  if (candidates.length === 0) return null;
+function pickBestCandidate(
+  item: Item,
+  candidates: Candidate[]
+): ScoredCandidate | null {
+  if (candidates.length === 0) {
+    return null;
+  }
 
   const wanted = normalizeSearchText(item.name);
 
-  const scored = candidates.map((candidate) => {
+  const scored: ScoredCandidate[] = candidates.map((candidate) => {
     const title = normalizeSearchText(candidate.title);
-    const platform = normalizePlatform(item.platform);
-    const category = normalizeCategory(item.category);
-    const editionConflict = hasEditionConflict(wanted, title);
+
+    const reasons: string[] = [];
 
     let score = similarityScore(wanted, title);
 
+    reasons.push(`similarity:${score.toFixed(2)}`);
+
     if (title.includes(wanted)) {
       score += 0.25;
+      reasons.push("full-title-match");
     }
 
-    score += getCategoryBoost(item, title);
+    const categoryBoost = getCategoryBoost(item, title);
+
+    if (categoryBoost > 0) {
+      score += categoryBoost;
+      reasons.push(`category-boost:${categoryBoost.toFixed(2)}`);
+    }
 
     if (candidate.price && candidate.price > 0) {
       score += 0.08;
+      reasons.push("has-price");
+    }
+
+    if (isLikelyCorrectEdition(item, title)) {
+      score += 0.18;
+      reasons.push("edition-match");
+    }
+
+    if (hasEditionConflict(wanted, title)) {
+      score -= 0.45;
+      reasons.push("edition-conflict");
+    }
+
+    if (hasWeakGuideSignals(item, title)) {
+      score -= 0.35;
+      reasons.push("weak-guide-signal");
+    }
+
+    if (hasMagazineSignals(title) && normalizeCategory(item.category) === "guide") {
+      score -= 0.4;
+      reasons.push("magazine-like-guide");
+    }
+
+    if (hasNarrativeSignals(title)) {
+      score -= 0.35;
+      reasons.push("narrative-signal");
     }
 
     if (
-      editionConflict &&
-      (category === "guide" || category === "magazine")
+      normalizeCategory(item.category) === "guide" &&
+      candidate.price != null &&
+      candidate.price < 12
     ) {
-      score -= 1.2;
-    }
-
-    if (
-      editionConflict &&
-      category === "guide" &&
-      (platform === "guide" || platform === "officialguide")
-    ) {
-      score -= 1.8;
-    }
-
-    if (category === "guide") {
-      if (
-        hasAny(title, [
-          "guia oficial",
-          "guía oficial",
-          "official guide",
-          "piggyback",
-          "bradygames",
-          "future press",
-          "guia estrategia",
-          "guía estrategia",
-          "guia estrategia oficial",
-          "guía estrategia oficial",
-          "la guia de estrategia oficial",
-          "la guía de estrategia oficial",
-          "guia completa",
-          "guía completa",
-          "guia playstation",
-          "guía playstation",
-          "playstation 2",
-          "ps2"
-        ])
-      ) {
-        score += 0.35;
-      }
-
-      if (
-        hasAny(title, [
-          "argumental",
-          "novela",
-          "comic",
-          "cómic",
-          "manga",
-          "resumen"
-        ])
-      ) {
-        score -= 0.4;
-      }
-
-      if (
-        hasAny(title, [
-          "revista",
-          "magazine",
-          "playmania",
-          "play mania",
-          "play2mania",
-          "play2 mania",
-          "hobby consolas",
-          "guias nº",
-          "guías nº"
-        ])
-      ) {
-        score -= 0.2;
-      }
-
-      const isOfficialGuideItem =
-        platform === "guide" ||
-        platform === "officialguide";
-
-      const hasStrongOfficialSignal = hasAny(title, [
-        "piggyback",
-        "guia oficial",
-        "guía oficial",
-        "official guide",
-        "guia estrategia oficial",
-        "guía estrategia oficial",
-        "la guia de estrategia oficial",
-        "la guía de estrategia oficial"
-      ]);
-
-      const looksLikeMagazineGuide = hasAny(title, [
-        "revista",
-        "hobby consolas",
-        "playmania",
-        "play mania",
-        "play2mania",
-        "play2 mania",
-        "guias nº",
-        "guías nº"
-      ]);
-
-      if (isOfficialGuideItem && !hasStrongOfficialSignal) {
-        score -= 0.45;
-      }
-
-      if (isOfficialGuideItem && looksLikeMagazineGuide) {
-        score -= 0.35;
-      }
-
-      if (isOfficialGuideItem && candidate.price && candidate.price < 12) {
-        score -= 0.35;
-      }
+      score -= 0.3;
+      reasons.push("suspicious-low-guide-price");
     }
 
     return {
       candidate,
-      score
+      score,
+      reasons
     };
   });
 
@@ -478,28 +428,31 @@ function pickBestCandidate(item: Item, candidates: Candidate[]): Candidate | nul
     scored.slice(0, 5).map((entry) => ({
       title: entry.candidate.title,
       score: Number(entry.score.toFixed(2)),
-      price: entry.candidate.price,
-      url: entry.candidate.url
+      reasons: entry.reasons,
+      price: entry.candidate.price
     }))
   );
 
   const best = scored[0];
 
-  if (!best || best.score < 0.48) {
+  if (!best) {
+    return null;
+  }
+
+  if (best.score < MIN_ACCEPTED_SCORE) {
     return null;
   }
 
   if (isUnreliableOfficialGuideCandidate(item, best.candidate)) {
     console.log("🏺 Todocoleccion rejected unreliable official guide:", {
       title: best.candidate.title,
-      price: best.candidate.price,
-      url: best.candidate.url
+      price: best.candidate.price
     });
 
     return null;
   }
 
-  return best.candidate;
+  return best;
 }
 
 async function buildResult(
@@ -515,13 +468,6 @@ async function buildResult(
       : candidate.price;
 
   if (!finalPrice || finalPrice <= 0) {
-    console.log("🏺 Todocoleccion matched but no usable price:", {
-      title: candidate.title,
-      url: candidate.url,
-      listingPrice: candidate.price,
-      detailPrice: detail?.price
-    });
-
     return null;
   }
 
@@ -529,14 +475,10 @@ async function buildResult(
     detail?.title ||
     candidate.title;
 
-  const confidence = computeConfidence(item, matchedTitle);
-
-  console.log("🏺 Todocoleccion selected:", {
-    title: matchedTitle,
-    finalPrice,
-    confidence,
-    url: candidate.url
-  });
+  const confidence = computeConfidence(
+    item,
+    matchedTitle
+  );
 
   return {
     price: Number(finalPrice.toFixed(2)),
@@ -560,7 +502,11 @@ async function buildResult(
 async function fetchDetail(
   url: string
 ): Promise<{ title: string | null; price: number | null } | null> {
-  const html = await fetchHtml(url, DIRECT_DETAIL_TIMEOUT_MS);
+  const html = await fetchHtml(
+    url,
+    DIRECT_DETAIL_TIMEOUT_MS
+  );
+
   if (!html) return null;
 
   const $ = cheerio.load(html);
@@ -574,7 +520,9 @@ async function fetchDetail(
   const price =
     parsePrice($("[class*='price']").first().text().trim()) ??
     parsePrice($("[class*='precio']").first().text().trim()) ??
-    parsePrice($("meta[property='product:price:amount']").attr("content")) ??
+    parsePrice(
+      $("meta[property='product:price:amount']").attr("content")
+    ) ??
     extractPriceFromJson(html) ??
     parsePrice($("body").text());
 
@@ -589,7 +537,11 @@ async function fetchHtml(
   timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<string | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const timeout = setTimeout(
+    () => controller.abort(),
+    timeoutMs
+  );
 
   try {
     const res = await fetch(url, {
@@ -600,30 +552,27 @@ async function fetchHtml(
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/127.0 Safari/537.36",
         Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Accept-Language":
+          "es-ES,es;q=0.9,en;q=0.8",
         Referer: BASE_URL
       }
     });
 
     if (!res.ok) {
-      console.log("❌ Todocoleccion fetch failed:", res.status, url);
       return null;
     }
 
     return await res.text();
-  } catch (error) {
-    console.log("❌ Todocoleccion fetch error:", {
-      url,
-      error
-    });
-
+  } catch {
     return null;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function parsePrice(value: string | null | undefined): number | null {
+function parsePrice(
+  value: string | null | undefined
+): number | null {
   const text = String(value || "").trim();
 
   if (!text) return null;
@@ -636,25 +585,25 @@ function parsePrice(value: string | null | undefined): number | null {
     return parseEuroPrice(euroMatches[0][1]);
   }
 
-  const labelMatch =
-    text.match(/precio\s*:?\s*(\d{1,5}(?:[.,]\d{1,2})?)/i) ||
-    text.match(/venta\s*:?\s*(\d{1,5}(?:[.,]\d{1,2})?)/i);
-
-  if (labelMatch?.[1]) {
-    return parseEuroPrice(labelMatch[1]);
-  }
-
-  return null;
+  return parseEuroPrice(text);
 }
 
-function extractPriceFromJson(html: string): number | null {
+function extractPriceFromJson(
+  html: string
+): number | null {
   const matches = [
     ...html.matchAll(/"price"\s*:\s*"?(\d+(?:[.,]\d+)?)"?/g)
   ];
 
   const prices = matches
-    .map((match) => Number(String(match[1]).replace(",", ".")))
-    .filter((price) => Number.isFinite(price) && price > 0);
+    .map((match) =>
+      Number(String(match[1]).replace(",", "."))
+    )
+    .filter(
+      (price) =>
+        Number.isFinite(price) &&
+        price > 0
+    );
 
   return prices[0] ?? null;
 }
@@ -675,11 +624,11 @@ function getImportantTokens(
     "uno",
     "oficial",
     "official",
+    "guide",
     "guia",
     "guía",
-    "guide",
-    "revista",
-    "magazine"
+    "magazine",
+    "revista"
   ]);
 
   const platformWords = getPlatformWords(item.platform);
@@ -695,178 +644,344 @@ function getImportantTokens(
     .filter((token) => !stopWords.has(token));
 }
 
-function getCategoryBoost(item: Item, normalizedTitle: string): number {
+function passesCategoryValidation(
+  item: Item,
+  title: string
+): boolean {
+  const category = normalizeCategory(item.category);
+  const platform = normalizePlatform(item.platform);
+
+  if (category === "guide") {
+    return hasAny(title, [
+      "guide",
+      "guia",
+      "guía",
+      "piggyback",
+      "official",
+      "oficial",
+      "strategy"
+    ]);
+  }
+
+  if (category === "magazine") {
+    return hasAny(title, [
+      "revista",
+      "magazine",
+      "hobby",
+      "consolas"
+    ]);
+  }
+
+  if (category === "merch") {
+    if (platform === "tazo") {
+      return hasAny(title, [
+        "tazo",
+        "tazos"
+      ]);
+    }
+
+    if (platform === "stack") {
+      return hasAny(title, [
+        "stack",
+        "stacks",
+        "iman",
+        "imán",
+        "imanes"
+      ]);
+    }
+
+    if (platform === "album") {
+      return hasAny(title, [
+        "album",
+        "álbum"
+      ]);
+    }
+
+    if (platform === "gachapon") {
+      return hasAny(title, [
+        "gachapon",
+        "gashapon"
+      ]);
+    }
+  }
+
+  return true;
+}
+
+function hasStrongNegativeSignals(
+  item: Item,
+  title: string
+): boolean {
+  const category = normalizeCategory(item.category);
+
+  if (
+    category === "guide" &&
+    hasAny(title, [
+      "comic",
+      "cómic",
+      "novela",
+      "resumen",
+      "argumental",
+      "poster",
+      "posterbook"
+    ])
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasWeakGuideSignals(
+  item: Item,
+  title: string
+): boolean {
+  const category = normalizeCategory(item.category);
+
+  if (category !== "guide") {
+    return false;
+  }
+
+  return !hasAny(title, [
+    "piggyback",
+    "official guide",
+    "guia oficial",
+    "guía oficial",
+    "strategy guide",
+    "bradygames",
+    "future press"
+  ]);
+}
+
+function hasMagazineSignals(
+  title: string
+): boolean {
+  return hasAny(title, [
+    "revista",
+    "magazine",
+    "hobby consolas",
+    "playmania",
+    "play mania"
+  ]);
+}
+
+function hasNarrativeSignals(
+  title: string
+): boolean {
+  return hasAny(title, [
+    "novela",
+    "comic",
+    "cómic",
+    "manga",
+    "argumental"
+  ]);
+}
+
+function getCategoryBoost(
+  item: Item,
+  normalizedTitle: string
+): number {
   const category = normalizeCategory(item.category);
   const platform = normalizePlatform(item.platform);
 
   if (
     category === "guide" &&
-    hasAny(normalizedTitle, ["guia", "guía", "guide", "piggyback", "oficial"])
+    hasAny(normalizedTitle, [
+      "guide",
+      "guia",
+      "guía",
+      "piggyback",
+      "oficial",
+      "official"
+    ])
   ) {
-    return 0.22;
+    return 0.2;
   }
 
   if (
     category === "magazine" &&
-    hasAny(normalizedTitle, ["revista", "magazine", "hobby", "consolas"])
+    hasAny(normalizedTitle, [
+      "revista",
+      "magazine",
+      "hobby",
+      "consolas"
+    ])
   ) {
-    return 0.22;
+    return 0.2;
   }
 
   if (category === "merch") {
-    if (platform === "tazo" && hasAny(normalizedTitle, ["tazo", "tazos"])) {
-      return 0.22;
+    if (
+      platform === "tazo" &&
+      hasAny(normalizedTitle, ["tazo", "tazos"])
+    ) {
+      return 0.2;
     }
 
     if (
       platform === "stack" &&
-      hasAny(normalizedTitle, ["stack", "stacks", "iman", "imán", "imanes"])
+      hasAny(normalizedTitle, [
+        "stack",
+        "stacks",
+        "iman",
+        "imán",
+        "imanes"
+      ])
     ) {
-      return 0.22;
-    }
-
-    if (platform === "album" && hasAny(normalizedTitle, ["album", "álbum"])) {
-      return 0.18;
-    }
-
-    if (
-      platform === "gachapon" &&
-      hasAny(normalizedTitle, ["gachapon", "gashapon"])
-    ) {
-      return 0.18;
+      return 0.2;
     }
   }
 
   return 0;
 }
 
-function computeConfidence(item: Item, matchedTitle: string): number {
+function computeConfidence(
+  item: Item,
+  matchedTitle: string
+): number {
   const wanted = normalizeSearchText(item.name);
+
   const matched = normalizeSearchText(matchedTitle);
 
-  let confidence = 0.42 + similarityScore(wanted, matched) * 0.44;
+  let confidence =
+    0.42 +
+    similarityScore(wanted, matched) * 0.42;
 
   if (matched.includes(wanted)) {
     confidence += 0.08;
   }
 
-  confidence += getCategoryBoost(item, matched);
+  if (isLikelyCorrectEdition(item, matched)) {
+    confidence += 0.08;
+  }
 
   if (hasEditionConflict(wanted, matched)) {
     confidence -= 0.25;
   }
 
-  return Math.max(
-    0.25,
-    Math.min(
-      0.92,
-      Number(confidence.toFixed(2))
-    )
+  confidence += getCategoryBoost(
+    item,
+    matched
+  );
+
+  return Number(
+    Math.max(
+      0.25,
+      Math.min(0.92, confidence)
+    ).toFixed(2)
   );
 }
 
-function normalizeCategory(value: string | null): string {
-  const normalized = String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "")
-    .trim();
+function isLikelyCorrectEdition(
+  item: Item,
+  title: string
+): boolean {
+  const wanted = normalizeSearchText(item.name);
 
-  if (!normalized) return "merch";
-  if (normalized === "other") return "merch";
-
-  return normalized;
+  return !hasEditionConflict(
+    wanted,
+    title
+  );
 }
 
-function normalizePlatform(value: string | null): string {
-  const normalized = normalizeText(value || "")
-    .replace(/\s+/g, "")
-    .trim();
+function hasEditionConflict(
+  wanted: string,
+  candidate: string
+): boolean {
+  const wantedTokens =
+    extractEditionTokens(wanted);
 
-  if (!normalized) return "";
+  const candidateTokens =
+    extractEditionTokens(candidate);
 
-  if (normalized.includes("officialguide")) return "officialguide";
-  if (normalized.includes("tazo")) return "tazo";
-  if (normalized.includes("stack")) return "stack";
-  if (normalized.includes("iman") || normalized.includes("imán")) return "stack";
-  if (normalized.includes("album") || normalized.includes("álbum")) return "album";
-  if (normalized.includes("gachapon") || normalized.includes("gashapon")) return "gachapon";
-  if (normalized.includes("guide") || normalized.includes("guia") || normalized.includes("guía")) return "guide";
-  if (normalized.includes("magazine") || normalized.includes("revista")) return "magazine";
-
-  return normalized;
-}
-
-function getPlatformWords(platform: string | null): string[] {
-  const type = normalizePlatform(platform);
-
-  const words: Record<string, string[]> = {
-    officialguide: ["official", "guide", "guia", "guía", "oficial"],
-    tazo: ["tazo", "tazos"],
-    stack: ["stack", "stacks", "iman", "imán", "imanes"],
-    album: ["album", "álbum"],
-    gachapon: ["gachapon", "gashapon"],
-    guide: ["guide", "guia", "guía", "oficial", "official"],
-    magazine: ["magazine", "revista"]
-  };
-
-  return words[type] ?? [];
-}
-
-function hasEditionConflict(wanted: string, title: string): boolean {
-  const wantedTokens = extractEditionTokens(wanted);
-  const titleTokens = extractEditionTokens(title);
-
-  if (wantedTokens.length === 0 || titleTokens.length === 0) {
+  if (
+    wantedTokens.length === 0 ||
+    candidateTokens.length === 0
+  ) {
     return false;
   }
 
-  return titleTokens.some((token) => !wantedTokens.includes(token));
-}
+  const wantedSet = new Set(wantedTokens);
 
-function extractEditionTokens(value: string): string[] {
-  const normalized = normalizeSearchText(value);
-  const tokens = new Set<string>();
+  const foreignTokens = candidateTokens.filter(
+    (token) => !wantedSet.has(token)
+  );
 
-  const compactSpecialMatches = [
-    ...normalized.matchAll(/\b[a-z]+(?:-| )?\d+\b/g)
-  ];
-
-  for (const match of compactSpecialMatches) {
-    tokens.add(match[0].replace(/\s+/g, "-"));
+  if (foreignTokens.length === 0) {
+    return false;
   }
 
-  const volumeMatches = [
-    ...normalized.matchAll(/\b(?:vol|volumen|volume|n|nº|no|numero|número)\s*\.?\s*(\d+)\b/g)
+  const dangerousForeignTokens = foreignTokens.filter(
+    (token) => {
+      if (/^\d+$/.test(token)) {
+        return Number(token) <= 30;
+      }
+
+      if (/^[a-z]+-\d+$/.test(token)) {
+        return true;
+      }
+
+      if (token.startsWith("num-")) {
+        return true;
+      }
+
+      return false;
+    }
+  );
+
+  return dangerousForeignTokens.length > 0;
+}
+
+function extractEditionTokens(
+  value: string
+): string[] {
+  const normalized =
+    normalizeSearchText(value);
+
+  const tokens = new Set<string>();
+
+  const compactMatches = [
+    ...normalized.matchAll(
+      /\b[a-z]+(?:-| )?\d+\b/g
+    )
   ];
 
-  for (const match of volumeMatches) {
+  for (const match of compactMatches) {
+    tokens.add(
+      match[0].replace(/\s+/g, "-")
+    );
+  }
+
+  const numberedMatches = [
+    ...normalized.matchAll(
+      /\b(?:vol|volume|volumen|tomo|num|numero|número|n)\s*\.?\s*(\d+)\b/g
+    )
+  ];
+
+  for (const match of numberedMatches) {
     tokens.add(`num-${match[1]}`);
   }
 
-  const arabicMatches = [
-    ...normalized.matchAll(/\b\d+\b/g)
-  ];
-
-  for (const match of arabicMatches) {
-    tokens.add(match[0]);
-  }
-
   const romanMatches = [
-    ...normalized.matchAll(/\b[ivxlcdm]{1,6}\b/g)
+    ...normalized.matchAll(
+      /\b[ivxlcdm]{1,6}\b/g
+    )
   ];
 
   for (const match of romanMatches) {
-    const romanValue = romanToNumber(match[0]);
+    const converted = romanToNumber(match[0]);
 
-    if (romanValue != null) {
-      tokens.add(String(romanValue));
+    if (converted != null) {
+      tokens.add(String(converted));
     }
   }
 
   return [...tokens];
 }
 
-function romanToNumber(value: string): number | null {
+function romanToNumber(
+  value: string
+): number | null {
   const roman = value.toLowerCase();
 
   if (!/^[ivxlcdm]+$/.test(roman)) {
@@ -889,7 +1004,9 @@ function romanToNumber(value: string): number | null {
   for (let i = roman.length - 1; i >= 0; i--) {
     const current = map[roman[i]];
 
-    if (!current) return null;
+    if (!current) {
+      return null;
+    }
 
     if (current < previous) {
       total -= current;
@@ -900,7 +1017,9 @@ function romanToNumber(value: string): number | null {
     previous = current;
   }
 
-  return total > 0 ? total : null;
+  return total > 0
+    ? total
+    : null;
 }
 
 function isUnreliableOfficialGuideCandidate(
@@ -908,60 +1027,209 @@ function isUnreliableOfficialGuideCandidate(
   candidate: Candidate
 ): boolean {
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
-  const title = normalizeSearchText(candidate.title);
 
-  if (category !== "guide") return false;
-  if (platform !== "officialguide" && platform !== "guide") return false;
+  const platform = normalizePlatform(item.platform);
+
+  if (category !== "guide") {
+    return false;
+  }
+
+  if (
+    platform !== "officialguide" &&
+    platform !== "guide"
+  ) {
+    return false;
+  }
+
+  const title =
+    normalizeSearchText(candidate.title);
 
   const hasStrongOfficialSignal = hasAny(title, [
     "piggyback",
     "bradygames",
     "future press",
+    "official guide",
     "guia oficial",
     "guía oficial",
-    "official guide",
-    "guia estrategia oficial",
-    "guía estrategia oficial",
-    "la guia de estrategia oficial",
-    "la guía de estrategia oficial"
+    "strategy guide"
   ]);
 
-  const looksLikeMagazineOrLooseGuide = hasAny(title, [
-    "revista",
-    "hobby consolas",
-    "playmania",
-    "play mania",
-    "play2mania",
-    "play2 mania",
-    "guia playstation",
-    "guía playstation",
-    "guia completa del juego",
-    "guía completa del juego"
-  ]);
+  if (!hasStrongOfficialSignal) {
+    return true;
+  }
 
-  if (!hasStrongOfficialSignal) return true;
-  if (looksLikeMagazineOrLooseGuide) return true;
-  if (candidate.price != null && candidate.price < 12) return true;
+  if (
+    candidate.price != null &&
+    candidate.price < 12
+  ) {
+    return true;
+  }
 
   return false;
 }
 
-function hasAny(value: string, tokens: string[]): boolean {
-  return tokens.some((token) => value.includes(token));
+function normalizeCategory(
+  value: string | null
+): string {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+
+  if (!normalized) {
+    return "merch";
+  }
+
+  if (normalized === "other") {
+    return "merch";
+  }
+
+  return normalized;
 }
 
-function looksLikeProductUrl(url: string): boolean {
-  const normalized = url.toLowerCase();
+function normalizePlatform(
+  value: string | null
+): string {
+  const normalized = normalizeText(value || "")
+    .replace(/\s+/g, "")
+    .trim();
 
-  if (!normalized.startsWith("http")) return false;
-  if (!normalized.includes("todocoleccion.net")) return false;
+  if (!normalized) {
+    return "";
+  }
 
-  if (normalized.includes("/buscador")) return false;
-  if (normalized.includes("/s/")) return false;
-  if (normalized.includes("/ayuda")) return false;
-  if (normalized.includes("/login")) return false;
-  if (normalized.includes("/carrito")) return false;
+  if (normalized.includes("officialguide")) {
+    return "officialguide";
+  }
+
+  if (normalized.includes("guide")) {
+    return "guide";
+  }
+
+  if (normalized.includes("tazo")) {
+    return "tazo";
+  }
+
+  if (normalized.includes("stack")) {
+    return "stack";
+  }
+
+  if (
+    normalized.includes("iman") ||
+    normalized.includes("imán")
+  ) {
+    return "stack";
+  }
+
+  if (
+    normalized.includes("album") ||
+    normalized.includes("álbum")
+  ) {
+    return "album";
+  }
+
+  if (
+    normalized.includes("gachapon") ||
+    normalized.includes("gashapon")
+  ) {
+    return "gachapon";
+  }
+
+  return normalized;
+}
+
+function getPlatformWords(
+  platform: string | null
+): string[] {
+  const type =
+    normalizePlatform(platform);
+
+  const words: Record<string, string[]> = {
+    officialguide: [
+      "official",
+      "guide",
+      "guia",
+      "guía",
+      "oficial"
+    ],
+
+    guide: [
+      "official",
+      "guide",
+      "guia",
+      "guía",
+      "oficial"
+    ],
+
+    tazo: [
+      "tazo",
+      "tazos"
+    ],
+
+    stack: [
+      "stack",
+      "stacks",
+      "iman",
+      "imán",
+      "imanes"
+    ],
+
+    album: [
+      "album",
+      "álbum"
+    ],
+
+    gachapon: [
+      "gachapon",
+      "gashapon"
+    ]
+  };
+
+  return words[type] ?? [];
+}
+
+function hasAny(
+  value: string,
+  tokens: string[]
+): boolean {
+  return tokens.some((token) =>
+    value.includes(token)
+  );
+}
+
+function looksLikeProductUrl(
+  url: string
+): boolean {
+  const normalized =
+    url.toLowerCase();
+
+  if (!normalized.startsWith("http")) {
+    return false;
+  }
+
+  if (
+    !normalized.includes(
+      "todocoleccion.net"
+    )
+  ) {
+    return false;
+  }
+
+  if (normalized.includes("/buscador")) {
+    return false;
+  }
+
+  if (normalized.includes("/s/")) {
+    return false;
+  }
+
+  if (normalized.includes("/login")) {
+    return false;
+  }
+
+  if (normalized.includes("/carrito")) {
+    return false;
+  }
 
   return (
     normalized.includes("/lote/") ||
@@ -969,11 +1237,19 @@ function looksLikeProductUrl(url: string): boolean {
   );
 }
 
-function titleFromUrl(url: string): string {
+function titleFromUrl(
+  url: string
+): string {
   try {
     const parsed = new URL(url);
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    const last = parts[parts.length - 1] || "";
+
+    const parts =
+      parsed.pathname
+        .split("/")
+        .filter(Boolean);
+
+    const last =
+      parts[parts.length - 1] || "";
 
     return decodeURIComponent(last)
       .replace(/\.htm(l)?$/i, "")
@@ -985,20 +1261,28 @@ function titleFromUrl(url: string): string {
   }
 }
 
-function normalizeSearchText(value: string): string {
+function normalizeSearchText(
+  value: string
+): string {
   return normalizeText(value)
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function clean(value: string): string {
+function clean(
+  value: string
+): string {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function absolutize(href: string): string {
-  if (!href) return "";
+function absolutize(
+  href: string
+): string {
+  if (!href) {
+    return "";
+  }
 
   if (href.startsWith("http")) {
     return href;
