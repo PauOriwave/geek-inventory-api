@@ -809,7 +809,11 @@ function hasDisallowedMagazineVariant(item: Item, title: string): boolean {
       "juegos y cia",
       "juegos y cía",
       "todo sega",
-      "micro hobby"
+      "micro hobby",
+      "todovhs",
+      "todo vhs",
+      "edicion hobby consolas",
+      "edición hobby consolas"
     ])
   ) {
     return true;
@@ -888,6 +892,15 @@ function hasStrongNegativeSignals(item: Item, title: string): boolean {
   if (category === "magazine") {
     if (
       hasAny(title, [
+        "todovhs",
+        "todo vhs",
+        "episodio",
+        "episodios",
+        "anime",
+        "dragon ball gt",
+        "dragon ball z",
+        "edicion hobby consolas",
+        "edición hobby consolas",
         "soundtrack",
         "bso",
         "llavero",
@@ -966,6 +979,8 @@ function hasHardMagazineAccessorySignal(title: string): boolean {
     /\bdvd\b/.test(title) ||
     /\bvhs\b/.test(title) ||
     /\bcassette\b/.test(title) ||
+    title.includes("todovhs") ||
+    title.includes("todo vhs") ||
     title.includes("contiene cd") ||
     title.includes("incluye cd") ||
     title.includes("con cd") ||
