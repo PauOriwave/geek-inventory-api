@@ -340,6 +340,10 @@ function filterCandidates(
       return false;
     }
 
+    if (hasEditionConflict(wanted, title)) {
+      return false;
+    }
+
     return true;
   });
 }
@@ -395,7 +399,10 @@ function pickBestCandidate(
       reasons.push("weak-guide-signal");
     }
 
-    if (hasMagazineSignals(title) && normalizeCategory(item.category) === "guide") {
+    if (
+      hasMagazineSignals(title) &&
+      normalizeCategory(item.category) === "guide"
+    ) {
       score -= 0.4;
       reasons.push("magazine-like-guide");
     }
@@ -888,11 +895,19 @@ function hasEditionConflict(
   wanted: string,
   candidate: string
 ): boolean {
-  const wantedTokens =
-    extractEditionTokens(wanted);
+  const wantedSaga = extractSagaEdition(wanted);
+  const candidateSaga = extractSagaEdition(candidate);
 
-  const candidateTokens =
-    extractEditionTokens(candidate);
+  if (
+    wantedSaga &&
+    candidateSaga &&
+    wantedSaga !== candidateSaga
+  ) {
+    return true;
+  }
+
+  const wantedTokens = extractEditionTokens(wanted);
+  const candidateTokens = extractEditionTokens(candidate);
 
   if (
     wantedTokens.length === 0 ||
@@ -915,6 +930,10 @@ function hasEditionConflict(
     (token) => {
       if (/^\d+$/.test(token)) {
         return Number(token) <= 30;
+      }
+
+      if (/^\d+-\d+$/.test(token)) {
+        return true;
       }
 
       if (/^[a-z]+-\d+$/.test(token)) {
@@ -942,7 +961,7 @@ function extractEditionTokens(
 
   const compactMatches = [
     ...normalized.matchAll(
-      /\b[a-z]+(?:-| )?\d+\b/g
+      /\b[a-z]+(?:-| )?\d+(?:-\d+)?\b/g
     )
   ];
 
@@ -964,19 +983,96 @@ function extractEditionTokens(
 
   const romanMatches = [
     ...normalized.matchAll(
-      /\b[ivxlcdm]{1,6}\b/g
+      /\b[ivxlcdm]{1,6}(?:-\d+)?\b/g
     )
   ];
 
   for (const match of romanMatches) {
-    const converted = romanToNumber(match[0]);
+    const normalizedRoman = normalizeRomanEdition(match[0]);
 
-    if (converted != null) {
-      tokens.add(String(converted));
+    if (normalizedRoman) {
+      tokens.add(normalizedRoman);
     }
   }
 
   return [...tokens];
+}
+
+function extractSagaEdition(
+  value: string
+): string | null {
+  const normalized = normalizeSearchText(value);
+
+  const sequelRoman = normalized.match(
+    /\b([ivxlcdm]{1,6})-(\d+)\b/i
+  );
+
+  if (sequelRoman?.[1] && sequelRoman?.[2]) {
+    const roman = romanToNumber(sequelRoman[1]);
+
+    if (roman != null) {
+      return `${roman}-${Number(sequelRoman[2])}`;
+    }
+  }
+
+  const sequelArabic = normalized.match(
+    /\b(\d+)-(\d+)\b/
+  );
+
+  if (sequelArabic?.[1] && sequelArabic?.[2]) {
+    return `${Number(sequelArabic[1])}-${Number(sequelArabic[2])}`;
+  }
+
+  const roman = normalized.match(
+    /\b[ivxlcdm]{1,6}\b/i
+  );
+
+  if (roman?.[0]) {
+    const converted = romanToNumber(roman[0]);
+
+    if (converted != null) {
+      return String(converted);
+    }
+  }
+
+  const arabic = normalized.match(
+    /\b(\d{1,3})\b/
+  );
+
+  if (arabic?.[1]) {
+    return String(Number(arabic[1]));
+  }
+
+  return null;
+}
+
+function normalizeRomanEdition(
+  value: string
+): string | null {
+  const normalized = value
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .trim();
+
+  const sequel = normalized.match(
+    /^([ivxlcdm]{1,6})-(\d+)$/
+  );
+
+  if (sequel?.[1] && sequel?.[2]) {
+    const roman = romanToNumber(sequel[1]);
+
+    if (roman != null) {
+      return `${roman}-${Number(sequel[2])}`;
+    }
+  }
+
+  const roman = romanToNumber(normalized);
+
+  if (roman != null) {
+    return String(roman);
+  }
+
+  return null;
 }
 
 function romanToNumber(
@@ -1106,6 +1202,10 @@ function normalizePlatform(
     return "guide";
   }
 
+  if (normalized.includes("guia")) {
+    return "guide";
+  }
+
   if (normalized.includes("tazo")) {
     return "tazo";
   }
@@ -1133,6 +1233,13 @@ function normalizePlatform(
     normalized.includes("gashapon")
   ) {
     return "gachapon";
+  }
+
+  if (
+    normalized.includes("magazine") ||
+    normalized.includes("revista")
+  ) {
+    return "magazine";
   }
 
   return normalized;
@@ -1182,6 +1289,11 @@ function getPlatformWords(
     gachapon: [
       "gachapon",
       "gashapon"
+    ],
+
+    magazine: [
+      "magazine",
+      "revista"
     ]
   };
 
