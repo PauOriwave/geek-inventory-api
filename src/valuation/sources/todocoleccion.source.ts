@@ -36,6 +36,7 @@ export async function getTodocoleccionPrice(
     name: item.name,
     category: item.category,
     platform: item.platform,
+    completeness: item.completeness,
     region: item.region
   });
 
@@ -163,7 +164,13 @@ function buildQueries(item: Item): string[] {
     if (platform === "stack") {
       queries.add(`${raw} stack`);
       queries.add(`${raw} stacks`);
+      queries.add(`${raw} staks`);
       queries.add(`${raw} imanes`);
+      queries.add(`${raw} coleccion completa`);
+      queries.add(`${raw} colección completa`);
+      queries.add(`${raw} album completo`);
+      queries.add(`${raw} álbum completo`);
+      queries.add(`${raw} 260/260`);
     }
 
     if (platform === "album") {
@@ -187,7 +194,7 @@ function buildQueries(item: Item): string[] {
     .map((query) => query.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((query, index, arr) => arr.indexOf(query) === index)
-    .slice(0, 16);
+    .slice(0, 18);
 }
 
 function extractCandidates(html: string): Candidate[] {
@@ -289,6 +296,7 @@ function addCandidate(input: {
 function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
   const wanted = normalizeSearchText(item.name);
   const category = normalizeCategory(item.category);
+  const platform = normalizePlatform(item.platform);
   const tokens = getImportantTokens(wanted, item);
 
   if (tokens.length === 0) return [];
@@ -302,6 +310,10 @@ function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
 
     if (category === "magazine" && !isMainMagazineCandidate(item, title)) {
       return false;
+    }
+
+    if (category === "merch" && platform === "stack") {
+      return passesStackCandidateValidation(item, title);
     }
 
     if (category !== "magazine" && hasEditionConflict(wanted, title)) {
@@ -330,6 +342,7 @@ function pickBestCandidate(
 
   const wanted = normalizeSearchText(item.name);
   const category = normalizeCategory(item.category);
+  const platform = normalizePlatform(item.platform);
 
   const scored: ScoredCandidate[] = candidates.map((candidate) => {
     const title = normalizeSearchText(candidate.title);
@@ -365,9 +378,24 @@ function pickBestCandidate(
       reasons.push(`magazine-boost:${magazineBoost.toFixed(2)}`);
     }
 
-    if (isMainMagazineCandidate(item, title)) {
+    if (category === "magazine" && isMainMagazineCandidate(item, title)) {
       score += 0.35;
       reasons.push("main-magazine-match");
+    }
+
+    if (category === "merch" && platform === "stack") {
+      const stackBoost = getStackCollectionBoost(item, title);
+      const stackPenalty = getStackCollectionPenalty(item, title);
+
+      if (stackBoost > 0) {
+        score += stackBoost;
+        reasons.push(`stack-collection-boost:${stackBoost.toFixed(2)}`);
+      }
+
+      if (stackPenalty > 0) {
+        score -= stackPenalty;
+        reasons.push(`stack-collection-penalty:${stackPenalty.toFixed(2)}`);
+      }
     }
 
     if (candidate.price && candidate.price > 0) {
@@ -375,12 +403,12 @@ function pickBestCandidate(
       reasons.push("has-price");
     }
 
-    if (category !== "magazine" && isLikelyCorrectEdition(item, title)) {
+    if (category !== "magazine" && category !== "merch" && isLikelyCorrectEdition(item, title)) {
       score += 0.18;
       reasons.push("edition-match");
     }
 
-    if (category !== "magazine" && hasEditionConflict(wanted, title)) {
+    if (category !== "magazine" && category !== "merch" && hasEditionConflict(wanted, title)) {
       score -= 0.45;
       reasons.push("edition-conflict");
     }
@@ -473,6 +501,7 @@ async function buildResult(
   const matchedTitle = detail?.title || candidate.title;
   const normalizedMatchedTitle = normalizeSearchText(matchedTitle);
   const category = normalizeCategory(item.category);
+  const platform = normalizePlatform(item.platform);
 
   if (hasDisallowedMagazineVariant(item, normalizedMatchedTitle)) {
     return null;
@@ -482,8 +511,15 @@ async function buildResult(
     return null;
   }
 
+  if (category === "merch" && platform === "stack") {
+    if (!passesStackCandidateValidation(item, normalizedMatchedTitle)) {
+      return null;
+    }
+  }
+
   if (
     category !== "magazine" &&
+    category !== "merch" &&
     hasEditionConflict(normalizeSearchText(item.name), normalizedMatchedTitle)
   ) {
     return null;
@@ -513,8 +549,13 @@ async function buildResult(
       url: candidate.url,
       category: item.category,
       platform: item.platform ?? null,
+      completeness: item.completeness ?? null,
       region: item.region ?? null,
       magazineIssue: extractMagazineIssue(item.name),
+      stackCollectionMode:
+        category === "merch" && platform === "stack"
+          ? getStackCollectionMode(item, normalizedMatchedTitle)
+          : null,
       priceRole: "listing",
       liquidity: "low"
     }
@@ -703,7 +744,18 @@ function passesCategoryValidation(item: Item, title: string): boolean {
     if (platform === "tazo") return hasAny(title, ["tazo", "tazos"]);
 
     if (platform === "stack") {
-      return hasAny(title, ["stack", "stacks", "iman", "imán", "imanes"]);
+      return hasAny(title, [
+        "stack",
+        "stacks",
+        "staks",
+        "iman",
+        "imán",
+        "imanes",
+        "album",
+        "álbum",
+        "coleccion",
+        "colección"
+      ]);
     }
 
     if (platform === "album") return hasAny(title, ["album", "álbum"]);
@@ -797,6 +849,147 @@ function isMainMagazineCandidate(item: Item, title: string): boolean {
   }
 
   return true;
+}
+
+function passesStackCandidateValidation(item: Item, title: string): boolean {
+  const wanted = normalizeSearchText(item.name);
+  const candidate = normalizeSearchText(title);
+
+  if (!hasAny(candidate, ["pokemon", "pokémon"])) return false;
+  if (!hasAny(candidate, ["stack", "stacks", "staks", "iman", "imán", "imanes"])) return false;
+
+  if (wanted.includes("johto") && !candidate.includes("johto")) {
+    return false;
+  }
+
+  if (isCompleteCollectionItem(item)) {
+    return hasCompleteCollectionSignals(candidate);
+  }
+
+  if (isAlbumOnlyItem(item)) {
+    return hasAlbumSignals(candidate) && !hasSingleStackSignals(candidate);
+  }
+
+  if (!isCompleteCollectionItem(item) && hasCompleteCollectionSignals(candidate)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isCompleteCollectionItem(item: Item): boolean {
+  const text = normalizeSearchText(
+    `${item.name} ${item.platform ?? ""} ${item.completeness ?? ""} ${item.notes ?? ""}`
+  );
+
+  return hasAny(text, [
+    "complete",
+    "completo",
+    "completa",
+    "coleccion completa",
+    "colección completa",
+    "set completo",
+    "full set",
+    "260 260"
+  ]);
+}
+
+function isAlbumOnlyItem(item: Item): boolean {
+  const text = normalizeSearchText(
+    `${item.name} ${item.platform ?? ""} ${item.completeness ?? ""} ${item.notes ?? ""}`
+  );
+
+  return hasAny(text, [
+    "album",
+    "álbum",
+    "vacio",
+    "vacío",
+    "empty album"
+  ]);
+}
+
+function hasCompleteCollectionSignals(title: string): boolean {
+  return (
+    hasAny(title, [
+      "coleccion completa",
+      "colección completa",
+      "completa con album",
+      "completa con álbum",
+      "album completo",
+      "álbum completo",
+      "set completo",
+      "full set",
+      "completo"
+    ]) ||
+    /\b\d{2,4}\s*\/\s*\d{2,4}\b/.test(title)
+  );
+}
+
+function hasAlbumSignals(title: string): boolean {
+  return hasAny(title, ["album", "álbum"]);
+}
+
+function hasSingleStackSignals(title: string): boolean {
+  return (
+    /\bn\s*\.?\s*\d{1,4}\b/.test(title) ||
+    /\bnº\s*\d{1,4}\b/.test(title) ||
+    /\bnumero\s*\d{1,4}\b/.test(title) ||
+    /\bnum\s*\d{1,4}\b/.test(title) ||
+    hasAny(title, [
+      "iman",
+      "imán",
+      "cromo",
+      "individual",
+      "suelto",
+      "suelta"
+    ])
+  );
+}
+
+function getStackCollectionBoost(item: Item, title: string): number {
+  if (!isCompleteCollectionItem(item)) {
+    return 0;
+  }
+
+  let boost = 0;
+
+  if (hasCompleteCollectionSignals(title)) boost += 1.2;
+  if (hasAlbumSignals(title)) boost += 0.25;
+  if (title.includes("johto")) boost += 0.2;
+  if (title.includes("panini")) boost += 0.1;
+  if (title.includes("260/260") || title.includes("260 260")) boost += 0.4;
+
+  return Math.min(1.8, boost);
+}
+
+function getStackCollectionPenalty(item: Item, title: string): number {
+  if (!isCompleteCollectionItem(item)) {
+    return hasCompleteCollectionSignals(title) ? 0.7 : 0;
+  }
+
+  let penalty = 0;
+
+  if (hasSingleStackSignals(title)) penalty += 1.2;
+  if (hasAny(title, ["nº", "numero", "num"])) penalty += 0.35;
+  if (!hasCompleteCollectionSignals(title)) penalty += 0.8;
+
+  return Math.min(2.0, penalty);
+}
+
+function getStackCollectionMode(item: Item, title: string): string {
+  if (isCompleteCollectionItem(item) && hasCompleteCollectionSignals(title)) {
+    return "complete_collection";
+  }
+
+  if (hasAlbumSignals(title) && !hasSingleStackSignals(title)) {
+    return "album";
+  }
+
+  if (hasSingleStackSignals(title)) {
+    return "single";
+  }
+
+  return "unknown";
 }
 
 function hasDisallowedMagazineVariant(item: Item, title: string): boolean {
@@ -1089,7 +1282,18 @@ function getCategoryBoost(item: Item, normalizedTitle: string): number {
 
     if (
       platform === "stack" &&
-      hasAny(normalizedTitle, ["stack", "stacks", "iman", "imán", "imanes"])
+      hasAny(normalizedTitle, [
+        "stack",
+        "stacks",
+        "staks",
+        "iman",
+        "imán",
+        "imanes",
+        "album",
+        "álbum",
+        "coleccion",
+        "colección"
+      ])
     ) {
       return 0.2;
     }
@@ -1113,16 +1317,17 @@ function computeConfidence(item: Item, matchedTitle: string): number {
   const wanted = normalizeSearchText(item.name);
   const matched = normalizeSearchText(matchedTitle);
   const category = normalizeCategory(item.category);
+  const platform = normalizePlatform(item.platform);
 
   let confidence = 0.42 + similarityScore(wanted, matched) * 0.42;
 
   if (matched.includes(wanted)) confidence += 0.08;
 
-  if (category !== "magazine" && isLikelyCorrectEdition(item, matched)) {
+  if (category !== "magazine" && category !== "merch" && isLikelyCorrectEdition(item, matched)) {
     confidence += 0.08;
   }
 
-  if (category !== "magazine" && hasEditionConflict(wanted, matched)) {
+  if (category !== "magazine" && category !== "merch" && hasEditionConflict(wanted, matched)) {
     confidence -= 0.25;
   }
 
@@ -1132,6 +1337,16 @@ function computeConfidence(item: Item, matchedTitle: string): number {
 
   if (category === "magazine" && hasMagazineSupplementSignals(matched)) {
     confidence -= 0.15;
+  }
+
+  if (category === "merch" && platform === "stack") {
+    if (isCompleteCollectionItem(item) && hasCompleteCollectionSignals(matched)) {
+      confidence += 0.18;
+    }
+
+    if (isCompleteCollectionItem(item) && hasSingleStackSignals(matched)) {
+      confidence -= 0.35;
+    }
   }
 
   return Number(Math.max(0.25, Math.min(0.92, confidence)).toFixed(2));
@@ -1586,9 +1801,13 @@ function normalizePlatform(value: string | null): string {
   }
 
   if (normalized.includes("tazo")) return "tazo";
-  if (normalized.includes("stack")) return "stack";
 
-  if (normalized.includes("iman") || normalized.includes("imán")) {
+  if (
+    normalized.includes("stack") ||
+    normalized.includes("staks") ||
+    normalized.includes("iman") ||
+    normalized.includes("imán")
+  ) {
     return "stack";
   }
 
@@ -1610,7 +1829,7 @@ function getPlatformWords(platform: string | null): string[] {
     officialguide: ["official", "guide", "guia", "guía", "oficial"],
     guide: ["official", "guide", "guia", "guía", "oficial"],
     tazo: ["tazo", "tazos"],
-    stack: ["stack", "stacks", "iman", "imán", "imanes"],
+    stack: ["stack", "stacks", "staks", "iman", "imán", "imanes"],
     album: ["album", "álbum"],
     gachapon: ["gachapon", "gashapon"],
     magazine: ["magazine", "revista"]
