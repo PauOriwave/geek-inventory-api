@@ -54,6 +54,7 @@ const DUNGEON_MARVELS_MERCH_MIN_CONFIDENCE = 0.6;
 const NIN_NIN_GAME_MERCH_MIN_CONFIDENCE = 0.55;
 const TODOCOLECCION_MIN_CONFIDENCE = 0.45;
 const PRICECHARTING_GUIDE_MIN_CONFIDENCE = 0.55;
+const SUSPICIOUS_GUIDE_PUBLISHER_PRICE_LIMIT = 12;
 
 const CACHE_TTL_HOURS = 24;
 
@@ -321,6 +322,41 @@ function normalizePlatform(value: string | null): string | null {
   }
 
   return normalized;
+}
+
+function normalizeValuationText(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isSuspiciousGuidePriceResult(
+  item: Item,
+  result: ScraperSourceResult
+): boolean {
+  const category = normalizeCategory(item.category);
+
+  if (category !== "guide") return false;
+  if (result.source !== "pricecharting_guide") return false;
+  if (result.price >= SUSPICIOUS_GUIDE_PUBLISHER_PRICE_LIMIT) return false;
+
+  const text = normalizeValuationText(
+    `${item.name} ${item.platform ?? ""} ${result.matchedTitle ?? ""}`
+  );
+
+  const hasKnownGuidePublisher =
+    text.includes("piggyback") ||
+    text.includes("bradygames") ||
+    text.includes("brady games") ||
+    text.includes("future press");
+
+  if (!hasKnownGuidePublisher) return false;
+
+  return true;
 }
 
 function isFunkoPopItem(item: Item): boolean {
@@ -793,6 +829,18 @@ async function scrapeValuation(item: Item): Promise<{
           price: result.price,
           confidence: result.confidence,
           requiredConfidence
+        });
+
+        continue;
+      }
+
+      if (isSuspiciousGuidePriceResult(item, result)) {
+        console.log("[valuation] Ignoring suspicious guide price:", {
+          source: result.source,
+          price: result.price,
+          currency: result.currency ?? null,
+          confidence: result.confidence,
+          matchedTitle: result.matchedTitle
         });
 
         continue;
