@@ -16,6 +16,7 @@ type Candidate = {
 };
 
 const BASE_URL = "https://www.pricecharting.com";
+const MIN_RELIABLE_GUIDE_PRICE_USD = 12;
 
 export async function getPriceChartingGuidePrice(
   item: Item
@@ -42,6 +43,17 @@ export async function getPriceChartingGuidePrice(
     const detail = extractDirectDetail(html, directUrl);
 
     if (!detail || !detail.price || detail.price <= 0) {
+      continue;
+    }
+
+    if (!isReliableGuidePrice(detail.price)) {
+      console.log("📘 PriceCharting Guide direct rejected low price:", {
+        wanted: item.name,
+        matchedTitle: detail.title,
+        price: detail.price,
+        url: directUrl
+      });
+
       continue;
     }
 
@@ -112,6 +124,17 @@ export async function getPriceChartingGuidePrice(
     const best = pickBestCandidate(item, filtered);
 
     if (!best) continue;
+
+    if (!isReliableGuidePrice(best.price)) {
+      console.log("📘 PriceCharting Guide rejected low search price:", {
+        wanted: item.name,
+        matchedTitle: best.title,
+        price: best.price,
+        url: best.url
+      });
+
+      continue;
+    }
 
     const confidence = computeConfidence(
       item,
@@ -329,6 +352,10 @@ function filterCandidates(
     const title = normalizeSearchText(candidate.title);
     const candidateEdition = extractSagaEdition(title);
 
+    if (!isReliableGuidePrice(candidate.price)) {
+      return false;
+    }
+
     if (
       wantedEdition &&
       candidateEdition &&
@@ -537,6 +564,10 @@ function isReliableDirectMatch(
   }
 
   return similarityScore(wanted, matched) >= 0.45 || matched.includes(wanted);
+}
+
+function isReliableGuidePrice(price: number | null | undefined): boolean {
+  return typeof price === "number" && price >= MIN_RELIABLE_GUIDE_PRICE_USD;
 }
 
 async function fetchHtml(
