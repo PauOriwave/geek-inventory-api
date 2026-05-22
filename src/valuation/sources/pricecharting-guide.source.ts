@@ -8,22 +8,25 @@ import {
 
 import { ScraperSourceResult } from "../scraper.types";
 
+type PriceKind =
+  | "complete"
+  | "itemAndManual"
+  | "itemAndBox"
+  | "loose"
+  | "market";
+
 type Candidate = {
   title: string;
   price: number | null;
   url: string;
+  priceKind?: PriceKind;
   metadata?: Record<string, unknown>;
 };
 
-type PriceKind =
-  | "loose"
-  | "complete"
-  | "itemAndManual"
-  | "itemAndBox";
-
 const BASE_URL = "https://www.pricecharting.com";
-
 const MIN_WEAK_GUIDE_PRICE_USD = 12;
+const MIN_DIRECT_MATCH_SCORE = 0.48;
+const MIN_SEARCH_MATCH_SCORE = 0.55;
 
 export async function getPriceChartingGuidePrice(
   item: Item
@@ -31,10 +34,12 @@ export async function getPriceChartingGuidePrice(
   console.log("📘 PriceCharting Guide called:", {
     itemId: item.id,
     name: item.name,
-    category: item.category
+    category: item.category,
+    platform: item.platform,
+    region: item.region
   });
 
-  if (item.category !== "guide") {
+  if (normalizeCategory(item.category) !== "guide") {
     return null;
   }
 
@@ -49,46 +54,53 @@ export async function getPriceChartingGuidePrice(
 
     const detail = extractDirectDetail(html, directUrl);
 
+    console.log("📘 PriceCharting Guide direct detail:", {
+      title: detail?.title,
+      price: detail?.price,
+      priceKind: detail?.priceKind,
+      metadata: detail?.metadata,
+      url: directUrl
+    });
+
     if (!detail || !detail.price || detail.price <= 0) {
       continue;
     }
 
-    if (!isReliableDirectMatch(item, detail.title)) {
-      console.log("📘 PriceCharting Guide direct rejected:", {
+    const match = scoreGuideMatch(item, detail.title);
+
+    if (!isReliableDirectMatch(item, detail.title, match.score)) {
+      console.log("📘 PriceCharting Guide direct rejected match:", {
         wanted: item.name,
         matchedTitle: detail.title,
+        score: Number(match.score.toFixed(2)),
+        reasons: match.reasons,
         url: directUrl
       });
 
       continue;
     }
 
-    if (
-      !isReliableGuidePrice(
-        item,
-        detail.price,
-        detail.metadata?.priceKind as PriceKind | undefined,
-        detail.title
-      )
-    ) {
-      console.log("📘 PriceCharting Guide suspicious direct price:", {
-        title: detail.title,
+    if (!isReliableGuidePrice(item, detail.price, detail.priceKind, detail.title)) {
+      console.log("📘 PriceCharting Guide direct rejected price:", {
+        wanted: item.name,
+        matchedTitle: detail.title,
         price: detail.price,
-        priceKind: detail.metadata?.priceKind
+        priceKind: detail.priceKind,
+        url: directUrl
       });
 
       continue;
     }
 
-    const confidence = computeConfidence(
-      item,
-      detail.title
-    );
+    const confidence = computeConfidence(item, detail.title, detail.priceKind);
 
     console.log("📘 PriceCharting Guide direct selected:", {
       title: detail.title,
       price: detail.price,
+      priceKind: detail.priceKind,
       confidence,
+      score: Number(match.score.toFixed(2)),
+      reasons: match.reasons,
       url: directUrl
     });
 
@@ -104,7 +116,12 @@ export async function getPriceChartingGuidePrice(
         provider: "pricecharting",
         mode: "direct",
         url: directUrl,
-        prices: detail.metadata ?? {}
+        priceKind: detail.priceKind,
+        priceRole: "historical",
+        liquidity: "low",
+        prices: detail.metadata ?? {},
+        matchReasons: match.reasons,
+        matchScore: Number(match.score.toFixed(3))
       }
     };
   }
@@ -125,44 +142,48 @@ export async function getPriceChartingGuidePrice(
 
     console.log(
       "📘 PriceCharting Guide candidates:",
-      candidates.map((candidate) => ({
+      candidates.slice(0, 20).map((candidate) => ({
         title: candidate.title,
         price: candidate.price,
+        priceKind: candidate.priceKind,
         url: candidate.url
       }))
     );
 
     const filtered = filterCandidates(item, candidates);
 
+    console.log(
+      "📘 PriceCharting Guide filtered:",
+      filtered.slice(0, 20).map((candidate) => ({
+        title: candidate.title,
+        price: candidate.price,
+        priceKind: candidate.priceKind,
+        url: candidate.url
+      }))
+    );
+
     const best = pickBestCandidate(item, filtered);
 
     if (!best) continue;
 
-    if (
-      !isReliableGuidePrice(
-        item,
-        best.price,
-        best.metadata?.priceKind as PriceKind | undefined,
-        best.title
-      )
-    ) {
-      console.log("📘 PriceCharting Guide suspicious search price:", {
-        title: best.title,
+    if (!isReliableGuidePrice(item, best.price, best.priceKind, best.title)) {
+      console.log("📘 PriceCharting Guide search rejected price:", {
+        wanted: item.name,
+        matchedTitle: best.title,
         price: best.price,
-        priceKind: best.metadata?.priceKind
+        priceKind: best.priceKind,
+        url: best.url
       });
 
       continue;
     }
 
-    const confidence = computeConfidence(
-      item,
-      best.title
-    );
+    const confidence = computeConfidence(item, best.title, best.priceKind);
 
     console.log("📘 PriceCharting Guide selected:", {
       title: best.title,
       price: best.price,
+      priceKind: best.priceKind,
       confidence
     });
 
@@ -178,6 +199,9 @@ export async function getPriceChartingGuidePrice(
         provider: "pricecharting",
         mode: "search",
         url: best.url,
+        priceKind: best.priceKind,
+        priceRole: "historical",
+        liquidity: "low",
         ...(best.metadata ?? {})
       }
     };
@@ -188,20 +212,14 @@ export async function getPriceChartingGuidePrice(
 
 function buildDirectProductUrls(item: Item): string[] {
   const canonical = buildCanonicalGuideName(item.name);
-  const publisher = detectGuidePublisher(item.name, item.platform);
 
   const slugs = new Set<string>();
 
   if (canonical) {
-    if (publisher) {
-      slugs.add(`${canonical}-${publisher}`);
-    }
-
     slugs.add(canonical);
   }
 
-  return [...slugs]
-    .map((slug) => `${BASE_URL}/game/strategy-guide/${slug}`);
+  return [...slugs].map((slug) => `${BASE_URL}/game/strategy-guide/${slug}`);
 }
 
 function buildQueries(item: Item): string[] {
@@ -211,19 +229,18 @@ function buildQueries(item: Item): string[] {
 
   const queries = new Set<string>();
 
-  if (canonical && publisher) {
-    queries.add(`${canonical} ${publisher}`);
-    queries.add(`${canonical} strategy guide`);
-    queries.add(`${canonical} official strategy guide`);
-    queries.add(`${canonical} guide`);
-  }
-
   if (canonical) {
+    queries.add(canonical);
     queries.add(`${canonical} strategy guide`);
     queries.add(`${canonical} official strategy guide`);
     queries.add(`${canonical} official guide`);
     queries.add(`${canonical} guide`);
-    queries.add(canonical);
+  }
+
+  if (canonical && publisher && !canonical.includes(publisher)) {
+    queries.add(`${canonical} ${publisher}`);
+    queries.add(`${canonical} ${publisher} strategy guide`);
+    queries.add(`${canonical} ${publisher} official strategy guide`);
   }
 
   queries.add(raw);
@@ -261,46 +278,68 @@ function extractDirectDetail(
     parsePriceFromPriceGuideRow($, "Item & Box") ??
     parsePriceFromLabel(html, "Item & Box");
 
-  let price: number | null = null;
-  let priceKind: PriceKind | undefined;
+  const marketPrice = extractFirstMarketPrice(html);
 
-  if (completePrice) {
-    price = completePrice;
-    priceKind = "complete";
-  } else if (itemAndManualPrice) {
-    price = itemAndManualPrice;
-    priceKind = "itemAndManual";
-  } else if (itemAndBoxPrice) {
-    price = itemAndBoxPrice;
-    priceKind = "itemAndBox";
-  } else if (loosePrice) {
-    price = loosePrice;
-    priceKind = "loose";
-  } else {
-    price = extractFirstMarketPrice(html);
-  }
+  const selected = selectBestGuidePrice({
+    completePrice,
+    itemAndManualPrice,
+    itemAndBoxPrice,
+    loosePrice,
+    marketPrice
+  });
 
-  if (!title || !price || price <= 0) {
+  if (!title || !selected.price || selected.price <= 0) {
     return null;
   }
 
   return {
     title,
-    price,
+    price: selected.price,
+    priceKind: selected.priceKind,
     url,
     metadata: {
       loosePrice,
       itemAndBoxPrice,
       itemAndManualPrice,
       completePrice,
-      priceKind
+      marketPrice,
+      selectedPriceKind: selected.priceKind
     }
   };
 }
 
+function selectBestGuidePrice(input: {
+  completePrice: number | null;
+  itemAndManualPrice: number | null;
+  itemAndBoxPrice: number | null;
+  loosePrice: number | null;
+  marketPrice: number | null;
+}): { price: number | null; priceKind: PriceKind | undefined } {
+  if (input.completePrice && input.completePrice > 0) {
+    return { price: input.completePrice, priceKind: "complete" };
+  }
+
+  if (input.itemAndManualPrice && input.itemAndManualPrice > 0) {
+    return { price: input.itemAndManualPrice, priceKind: "itemAndManual" };
+  }
+
+  if (input.itemAndBoxPrice && input.itemAndBoxPrice > 0) {
+    return { price: input.itemAndBoxPrice, priceKind: "itemAndBox" };
+  }
+
+  if (input.loosePrice && input.loosePrice > 0) {
+    return { price: input.loosePrice, priceKind: "loose" };
+  }
+
+  if (input.marketPrice && input.marketPrice > 0) {
+    return { price: input.marketPrice, priceKind: "market" };
+  }
+
+  return { price: null, priceKind: undefined };
+}
+
 function extractCandidates(html: string): Candidate[] {
   const $ = cheerio.load(html);
-
   const candidates: Candidate[] = [];
 
   $("table#games_table tr").each((_, el) => {
@@ -316,13 +355,12 @@ function extractCandidates(html: string): Candidate[] {
 
     const price = parsePrice(priceText);
 
-    if (!href || !title || !price) {
-      return;
-    }
+    if (!href || !title || !price) return;
 
     candidates.push({
       title,
       price,
+      priceKind: "market",
       url: absolutize(href)
     });
   });
@@ -330,28 +368,20 @@ function extractCandidates(html: string): Candidate[] {
   $("a[href*='/game/strategy-guide/']").each((_, el) => {
     const link = $(el);
     const href = link.attr("href") || "";
+
     const title =
       cleanTitle(link.text().trim()) ||
       titleFromUrl(absolutize(href));
 
     const root = link.closest("tr, li, article, div");
 
-    const completePrice = parsePrice(
-      root.find(".complete_price").text().trim()
-    );
-
-    const loosePrice = parsePrice(
+    const priceText =
       root.find(".js-price").first().text().trim() ||
-      root.text()
-    );
+      root.text();
 
-    const price =
-      completePrice ??
-      loosePrice;
+    const price = parsePrice(priceText);
 
-    if (!href || !title || !price) {
-      return;
-    }
+    if (!href || !title || !price) return;
 
     const url = absolutize(href);
 
@@ -368,12 +398,8 @@ function extractCandidates(html: string): Candidate[] {
     candidates.push({
       title,
       price,
-      url,
-      metadata: {
-        priceKind: completePrice
-          ? "complete"
-          : "loose"
-      }
+      priceKind: "market",
+      url
     });
   });
 
@@ -384,60 +410,14 @@ function filterCandidates(
   item: Item,
   candidates: Candidate[]
 ): Candidate[] {
-  const wanted = buildCanonicalSearchQuery(item);
-  const publisher = detectGuidePublisher(item.name, item.platform);
-  const wantedEdition = extractSagaEdition(wanted || item.name);
-
-  const tokens = wanted
-    .split(" ")
-    .filter(Boolean)
-    .filter((token) => token.length > 1);
-
-  if (tokens.length === 0) return [];
-
   return candidates.filter((candidate) => {
-    const title = normalizeSearchText(candidate.title);
-    const candidateEdition = extractSagaEdition(title);
+    if (!candidate.price || candidate.price <= 0) return false;
 
-    if (
-      wantedEdition &&
-      candidateEdition &&
-      wantedEdition !== candidateEdition
-    ) {
-      return false;
-    }
+    const match = scoreGuideMatch(item, candidate.title);
 
-    const matches = tokens.filter((token) =>
-      title.includes(token)
-    );
+    if (match.score < MIN_SEARCH_MATCH_SCORE) return false;
 
-    const ratio = matches.length / tokens.length;
-
-    if (ratio < 0.45) {
-      return false;
-    }
-
-    const hasGuideSignal =
-      hasAny(title, [
-        "guide",
-        "strategy",
-        "piggyback",
-        "bradygames",
-        "brady games",
-        "future press",
-        "guia",
-        "guía"
-      ]);
-
-    if (!hasGuideSignal) {
-      return false;
-    }
-
-    if (
-      publisher &&
-      !title.includes(publisher) &&
-      ratio < 0.75
-    ) {
+    if (!isReliableGuidePrice(item, candidate.price, candidate.priceKind, candidate.title)) {
       return false;
     }
 
@@ -449,58 +429,23 @@ function pickBestCandidate(
   item: Item,
   candidates: Candidate[]
 ): Candidate | null {
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  const wanted = buildCanonicalSearchQuery(item);
-  const publisher = detectGuidePublisher(item.name, item.platform);
-  const wantedEdition = extractSagaEdition(wanted || item.name);
+  if (candidates.length === 0) return null;
 
   const scored = candidates.map((candidate) => {
-    const title = normalizeSearchText(candidate.title);
-    const candidateEdition = extractSagaEdition(title);
+    const match = scoreGuideMatch(item, candidate.title);
 
-    let score = similarityScore(wanted, title);
+    let score = match.score;
 
-    if (title.includes(wanted)) {
-      score += 0.25;
-    }
-
-    if (
-      wantedEdition &&
-      candidateEdition &&
-      wantedEdition === candidateEdition
-    ) {
-      score += 0.25;
-    }
-
-    if (publisher && title.includes(publisher)) {
-      score += 0.2;
-    }
-
-    if (
-      hasAny(title, [
-        "official guide",
-        "official strategy guide",
-        "strategy guide",
-        "piggyback",
-        "bradygames",
-        "future press",
-        "guia oficial",
-        "guía oficial"
-      ])
-    ) {
-      score += 0.2;
-    }
-
-    if (candidate.price && candidate.price > 0) {
-      score += 0.05;
-    }
+    if (candidate.priceKind === "complete") score += 0.12;
+    if (candidate.priceKind === "itemAndManual") score += 0.08;
+    if (candidate.priceKind === "itemAndBox") score += 0.06;
+    if (candidate.priceKind === "loose" || candidate.priceKind === "market") score -= 0.04;
+    if (candidate.price && candidate.price > 0) score += 0.03;
 
     return {
       candidate,
-      score
+      score,
+      reasons: match.reasons
     };
   });
 
@@ -511,81 +456,145 @@ function pickBestCandidate(
     scored.slice(0, 5).map((entry) => ({
       title: entry.candidate.title,
       score: Number(entry.score.toFixed(2)),
-      price: entry.candidate.price
+      reasons: entry.reasons,
+      price: entry.candidate.price,
+      priceKind: entry.candidate.priceKind
     }))
   );
 
   const best = scored[0];
 
-  if (!best || best.score < 0.5) {
-    return null;
-  }
+  if (!best || best.score < MIN_SEARCH_MATCH_SCORE) return null;
 
   return best.candidate;
 }
 
-function computeConfidence(
+function scoreGuideMatch(
   item: Item,
   matchedTitle: string
-): number {
+): { score: number; reasons: string[] } {
   const wanted = buildCanonicalSearchQuery(item);
+  const wantedFull = normalizeSearchText(`${item.name} ${item.platform ?? ""}`);
   const matched = normalizeSearchText(matchedTitle);
 
-  const publisher = detectGuidePublisher(item.name, item.platform);
+  const reasons: string[] = [];
+  let score = similarityScore(wanted, matched);
+
+  reasons.push(`similarity:${score.toFixed(2)}`);
+
   const wantedEdition = extractSagaEdition(wanted || item.name);
   const matchedEdition = extractSagaEdition(matched);
 
-  let confidence =
-    0.48 +
-    similarityScore(wanted, matched) * 0.32;
+  if (wantedEdition && matchedEdition) {
+    if (wantedEdition === matchedEdition) {
+      score += 0.22;
+      reasons.push("edition-match");
+    } else {
+      score -= 0.9;
+      reasons.push("edition-conflict");
+    }
+  }
+
+  const publisher = detectGuidePublisher(item.name, item.platform);
+
+  if (publisher) {
+    if (matchesPublisher(matched, publisher)) {
+      score += 0.2;
+      reasons.push("publisher-match");
+    } else {
+      score -= 0.18;
+      reasons.push("publisher-missing");
+    }
+  }
+
+  if (hasGuideSignal(matched)) {
+    score += 0.22;
+    reasons.push("guide-signal");
+  } else {
+    score -= 0.35;
+    reasons.push("missing-guide-signal");
+  }
+
+  if (hasStrongGuideSignal(matched)) {
+    score += 0.14;
+    reasons.push("strong-guide-signal");
+  }
+
+  const wantedTokens = getCoreGameTokens(wanted);
+  const matchedTokens = getCoreGameTokens(matched);
+
+  if (wantedTokens.length > 0) {
+    const matches = wantedTokens.filter((token) => matchedTokens.includes(token));
+    const ratio = matches.length / wantedTokens.length;
+
+    score += ratio * 0.18;
+    reasons.push(`core-token-ratio:${ratio.toFixed(2)}`);
+
+    if (ratio < 0.65) {
+      score -= 0.35;
+      reasons.push("weak-core-token-match");
+    }
+  }
 
   if (matched.includes(wanted)) {
-    confidence += 0.08;
+    score += 0.18;
+    reasons.push("canonical-in-title");
+  }
+
+  if (hasDuplicatedPublisherSignal(matched)) {
+    score -= 0.35;
+    reasons.push("duplicated-publisher");
+  }
+
+  if (hasNonGuideNegativeSignal(matched)) {
+    score -= 0.55;
+    reasons.push("non-guide-negative");
   }
 
   if (
-    wantedEdition &&
-    matchedEdition &&
-    wantedEdition === matchedEdition
+    wantedFull.includes("piggyback") &&
+    matched.includes("piggyback") &&
+    hasStrongGuideSignal(matched)
   ) {
-    confidence += 0.1;
+    score += 0.12;
+    reasons.push("piggyback-strong-match");
   }
 
-  if (publisher && matched.includes(publisher)) {
-    confidence += 0.08;
+  return { score, reasons };
+}
+
+function computeConfidence(
+  item: Item,
+  matchedTitle: string,
+  priceKind?: PriceKind
+): number {
+  const match = scoreGuideMatch(item, matchedTitle);
+
+  let confidence = 0.35 + match.score * 0.42;
+
+  if (priceKind === "complete") confidence += 0.06;
+  if (priceKind === "itemAndManual") confidence += 0.04;
+  if (priceKind === "itemAndBox") confidence += 0.03;
+  if (priceKind === "loose" || priceKind === "market") confidence -= 0.03;
+
+  if (hasDuplicatedPublisherSignal(normalizeSearchText(matchedTitle))) {
+    confidence -= 0.12;
   }
 
-  if (
-    hasAny(matched, [
-      "official guide",
-      "official strategy guide",
-      "strategy guide",
-      "piggyback",
-      "bradygames",
-      "future press",
-      "guia oficial",
-      "guía oficial"
-    ])
-  ) {
-    confidence += 0.08;
-  }
-
-  return Math.max(
-    0.3,
-    Math.min(
-      0.95,
-      Number(confidence.toFixed(2))
-    )
-  );
+  return Math.max(0.3, Math.min(0.95, Number(confidence.toFixed(2))));
 }
 
 function isReliableDirectMatch(
   item: Item,
-  matchedTitle: string
+  matchedTitle: string,
+  score: number
 ): boolean {
-  const wanted = buildCanonicalSearchQuery(item);
   const matched = normalizeSearchText(matchedTitle);
 
+  if (!hasGuideSignal(matched)) return false;
+  if (hasNonGuideNegativeSignal(matched)) return false;
+
+  const wanted = buildCanonicalSearchQuery(item);
   const wantedEdition = extractSagaEdition(wanted || item.name);
   const matchedEdition = extractSagaEdition(matched);
 
@@ -597,24 +606,7 @@ function isReliableDirectMatch(
     return false;
   }
 
-  if (
-    !hasAny(matched, [
-      "guide",
-      "strategy",
-      "piggyback",
-      "bradygames",
-      "future press",
-      "guia",
-      "guía"
-    ])
-  ) {
-    return false;
-  }
-
-  return (
-    similarityScore(wanted, matched) >= 0.4 ||
-    matched.includes(wanted)
-  );
+  return score >= MIN_DIRECT_MATCH_SCORE;
 }
 
 function isReliableGuidePrice(
@@ -623,10 +615,9 @@ function isReliableGuidePrice(
   priceKind?: PriceKind,
   matchedTitle?: string
 ): boolean {
-  if (typeof price !== "number" || price <= 0) {
-    return false;
-  }
+  if (typeof price !== "number" || price <= 0) return false;
 
+  const wanted = normalizeSearchText(`${item.name} ${item.platform ?? ""}`);
   const matched = normalizeSearchText(matchedTitle ?? "");
 
   const hasStructuredPrice =
@@ -634,37 +625,139 @@ function isReliableGuidePrice(
     priceKind === "itemAndManual" ||
     priceKind === "itemAndBox";
 
-  const hasStrongGuideSignal =
-    matched.includes("official strategy guide") ||
-    matched.includes("strategy guide") ||
-    matched.includes("guia oficial") ||
-    matched.includes("guía oficial") ||
-    matched.includes("piggyback") ||
-    matched.includes("bradygames") ||
-    matched.includes("future press");
+  const strongGuide = hasStrongGuideSignal(matched);
+  const duplicatedPublisher = hasDuplicatedPublisherSignal(matched);
 
-  const hasDuplicatedPublisher =
-    matched.includes("piggyback piggyback") ||
-    matched.includes("bradygames bradygames") ||
-    matched.includes("future press future press");
+  if (duplicatedPublisher && price < MIN_WEAK_GUIDE_PRICE_USD) {
+    return false;
+  }
 
   if (
-    hasDuplicatedPublisher &&
-    price < MIN_WEAK_GUIDE_PRICE_USD
+    wanted.includes("piggyback") &&
+    price < MIN_WEAK_GUIDE_PRICE_USD &&
+    !hasStructuredPrice &&
+    !strongGuide
   ) {
     return false;
   }
 
-  const isSuspiciousLowPrice =
+  if (
     price < MIN_WEAK_GUIDE_PRICE_USD &&
     !hasStructuredPrice &&
-    !hasStrongGuideSignal;
-
-  if (isSuspiciousLowPrice) {
+    !strongGuide
+  ) {
     return false;
   }
 
   return true;
+}
+
+function hasGuideSignal(value: string): boolean {
+  return hasAny(value, [
+    "guide",
+    "strategy",
+    "official",
+    "guia",
+    "guía",
+    "piggyback",
+    "bradygames",
+    "brady games",
+    "future press"
+  ]);
+}
+
+function hasStrongGuideSignal(value: string): boolean {
+  return hasAny(value, [
+    "official guide",
+    "official strategy guide",
+    "strategy guide",
+    "guia oficial",
+    "guía oficial",
+    "guia de estrategia oficial",
+    "guía de estrategia oficial",
+    "la guia de estrategia oficial",
+    "la guía de estrategia oficial"
+  ]);
+}
+
+function hasDuplicatedPublisherSignal(value: string): boolean {
+  return (
+    value.includes("piggyback piggyback") ||
+    value.includes("bradygames bradygames") ||
+    value.includes("brady games brady games") ||
+    value.includes("future press future press")
+  );
+}
+
+function hasNonGuideNegativeSignal(value: string): boolean {
+  return hasAny(value, [
+    "dvd",
+    "blu ray",
+    "bluray",
+    "advent children",
+    "soundtrack",
+    "original soundtrack",
+    "ost",
+    "cd ",
+    "novela",
+    "manga",
+    "lost stranger",
+    "arte de",
+    "art of",
+    "llavero",
+    "pin ",
+    "figura",
+    "juego ",
+    "playstation",
+    "ps1",
+    "ps2",
+    "ps3",
+    "ps4",
+    "ps5",
+    "xbox",
+    "nintendo ds"
+  ]);
+}
+
+function matchesPublisher(title: string, publisher: string): boolean {
+  if (publisher === "piggyback") return title.includes("piggyback");
+  if (publisher === "bradygames") {
+    return title.includes("bradygames") || title.includes("brady games");
+  }
+  if (publisher === "future press") return title.includes("future press");
+
+  return title.includes(publisher);
+}
+
+function getCoreGameTokens(value: string): string[] {
+  const stopWords = new Set([
+    "the",
+    "and",
+    "of",
+    "de",
+    "la",
+    "el",
+    "los",
+    "las",
+    "official",
+    "strategy",
+    "guide",
+    "guia",
+    "guía",
+    "oficial",
+    "piggyback",
+    "bradygames",
+    "brady",
+    "games",
+    "future",
+    "press"
+  ]);
+
+  return normalizeSearchText(value)
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => token.length > 1)
+    .filter((token) => !stopWords.has(token));
 }
 
 async function fetchHtml(
@@ -673,14 +766,11 @@ async function fetchHtml(
   try {
     const res = await fetch(url, {
       headers: {
-        "User-Agent":
-          "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0"
       }
     });
 
-    if (!res.ok) {
-      return null;
-    }
+    if (!res.ok) return null;
 
     return await res.text();
   } catch {
@@ -700,9 +790,7 @@ function parsePriceFromPriceGuideRow(
     const row = $(el);
     const text = row.text().replace(/\s+/g, " ").trim();
 
-    if (!text.toLowerCase().includes(label.toLowerCase())) {
-      return;
-    }
+    if (!text.toLowerCase().includes(label.toLowerCase())) return;
 
     found = parsePrice(text);
   });
@@ -723,9 +811,7 @@ function parsePriceFromLabel(
 
   const match = html.replace(/\s+/g, " ").match(regex);
 
-  if (!match?.[1]) {
-    return null;
-  }
+  if (!match?.[1]) return null;
 
   return parsePrice(match[1]);
 }
@@ -746,23 +832,14 @@ function extractFirstMarketPrice(html: string): number | null {
   return null;
 }
 
-function parsePrice(
-  text: string
-): number | null {
-  const match =
-    text.match(/\$?\s*(\d{1,6}(?:[.,]\d{1,2})?)/);
+function parsePrice(text: string): number | null {
+  const match = text.match(/\$?\s*(\d{1,6}(?:[.,]\d{1,2})?)/);
 
-  if (!match?.[1]) {
-    return null;
-  }
+  if (!match?.[1]) return null;
 
-  const value = Number(
-    match[1].replace(",", ".")
-  );
+  const value = Number(match[1].replace(",", "."));
 
-  return Number.isFinite(value) && value > 0
-    ? value
-    : null;
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function buildCanonicalGuideName(name: string): string {
@@ -774,9 +851,7 @@ function buildCanonicalGuideName(name: string): string {
 }
 
 function buildCanonicalSearchQuery(item: Item): string {
-  const base = buildCanonicalSearchText(item.name);
-
-  return base;
+  return buildCanonicalSearchText(item.name);
 }
 
 function buildCanonicalSearchText(value: string): string {
@@ -784,8 +859,9 @@ function buildCanonicalSearchText(value: string): string {
     .replace(/\bla guía oficial\b/g, " ")
     .replace(/\bla guia oficial\b/g, " ")
     .replace(/\bofficial strategy guide\b/g, " ")
-    .replace(/\bstrategy guide\b/g, " ")
     .replace(/\bofficial guide\b/g, " ")
+    .replace(/\bstrategy guide\b/g, " ")
+    .replace(/\bguide\b/g, " ")
     .replace(/\sguía\s/g, " ")
     .replace(/\sguia\s/g, " ")
     .replace(/\s+/g, " ")
@@ -798,20 +874,9 @@ function detectGuidePublisher(
 ): string | null {
   const text = normalizeSearchText(`${name} ${platform ?? ""}`);
 
-  if (text.includes("piggyback")) {
-    return "piggyback";
-  }
-
-  if (
-    text.includes("bradygames") ||
-    text.includes("brady games")
-  ) {
-    return "bradygames";
-  }
-
-  if (text.includes("future press")) {
-    return "future press";
-  }
+  if (text.includes("piggyback")) return "piggyback";
+  if (text.includes("bradygames") || text.includes("brady games")) return "bradygames";
+  if (text.includes("future press")) return "future press";
 
   return null;
 }
@@ -819,45 +884,31 @@ function detectGuidePublisher(
 function extractSagaEdition(value: string): string | null {
   const normalized = normalizeSearchText(value);
 
-  const sequelRoman = normalized.match(
-    /\b([ivxlcdm]{1,6})-(\d+)\b/i
-  );
+  const sequelRoman = normalized.match(/\b([ivxlcdm]{1,6})-(\d+)\b/i);
 
   if (sequelRoman?.[1] && sequelRoman?.[2]) {
     const roman = romanToNumber(sequelRoman[1]);
 
-    if (roman != null) {
-      return `${roman}-${Number(sequelRoman[2])}`;
-    }
+    if (roman != null) return `${roman}-${Number(sequelRoman[2])}`;
   }
 
-  const sequelArabic = normalized.match(
-    /\b(\d+)-(\d+)\b/
-  );
+  const sequelArabic = normalized.match(/\b(\d+)-(\d+)\b/);
 
   if (sequelArabic?.[1] && sequelArabic?.[2]) {
     return `${Number(sequelArabic[1])}-${Number(sequelArabic[2])}`;
   }
 
-  const roman = normalized.match(
-    /\b[ivxlcdm]{1,6}\b/i
-  );
+  const roman = normalized.match(/\b[ivxlcdm]{1,6}\b/i);
 
   if (roman?.[0]) {
     const converted = romanToNumber(roman[0]);
 
-    if (converted != null) {
-      return String(converted);
-    }
+    if (converted != null) return String(converted);
   }
 
-  const arabic = normalized.match(
-    /\b(\d{1,3})\b/
-  );
+  const arabic = normalized.match(/\b(\d{1,3})\b/);
 
-  if (arabic?.[1]) {
-    return String(Number(arabic[1]));
-  }
+  if (arabic?.[1]) return String(Number(arabic[1]));
 
   return null;
 }
@@ -865,9 +916,7 @@ function extractSagaEdition(value: string): string | null {
 function romanToNumber(value: string): number | null {
   const roman = value.toLowerCase();
 
-  if (!/^[ivxlcdm]+$/.test(roman)) {
-    return null;
-  }
+  if (!/^[ivxlcdm]+$/.test(roman)) return null;
 
   const map: Record<string, number> = {
     i: 1,
@@ -885,9 +934,7 @@ function romanToNumber(value: string): number | null {
   for (let i = roman.length - 1; i >= 0; i--) {
     const current = map[roman[i]];
 
-    if (!current) {
-      return null;
-    }
+    if (!current) return null;
 
     if (current < previous) {
       total -= current;
@@ -901,17 +948,20 @@ function romanToNumber(value: string): number | null {
   return total > 0 ? total : null;
 }
 
-function normalizeSearchText(
-  value: string
-): string {
+function normalizeCategory(value: string | null): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+}
+
+function normalizeSearchText(value: string): string {
   return normalizeText(value)
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function clean(
-  value: string
-): string {
+function clean(value: string): string {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim();
@@ -925,21 +975,12 @@ function cleanTitle(value: string): string {
     .trim();
 }
 
-function hasAny(
-  value: string,
-  tokens: string[]
-): boolean {
-  return tokens.some((token) =>
-    value.includes(token)
-  );
+function hasAny(value: string, tokens: string[]): boolean {
+  return tokens.some((token) => value.includes(normalizeSearchText(token)));
 }
 
-function absolutize(
-  href: string
-): string {
-  if (href.startsWith("http")) {
-    return href;
-  }
+function absolutize(href: string): string {
+  if (href.startsWith("http")) return href;
 
   return `${BASE_URL}${href}`;
 }
