@@ -54,7 +54,7 @@ const DUNGEON_MARVELS_MERCH_MIN_CONFIDENCE = 0.6;
 const NIN_NIN_GAME_MERCH_MIN_CONFIDENCE = 0.55;
 const TODOCOLECCION_MIN_CONFIDENCE = 0.45;
 const PRICECHARTING_GUIDE_MIN_CONFIDENCE = 0.55;
-const SUSPICIOUS_GUIDE_PUBLISHER_PRICE_LIMIT = 12;
+const SUSPICIOUS_GUIDE_PUBLISHER_PRICE_LIMIT = 1.5;
 
 const CACHE_TTL_HOURS = 24;
 
@@ -354,9 +354,7 @@ function isSuspiciousGuidePriceResult(
     text.includes("brady games") ||
     text.includes("future press");
 
-  if (!hasKnownGuidePublisher) return false;
-
-  return true;
+  return hasKnownGuidePublisher;
 }
 
 function isFunkoPopItem(item: Item): boolean {
