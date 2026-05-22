@@ -108,6 +108,7 @@ function buildQueries(item: Item): string[] {
   const normalized = normalizeSearchText(raw);
   const category = normalizeCategory(item.category);
   const platform = normalizePlatform(item.platform);
+  const completeness = normalizeSearchText(item.completeness ?? "");
 
   const queries = new Set<string>();
 
@@ -165,16 +166,28 @@ function buildQueries(item: Item): string[] {
       queries.add(`${raw} stacks`);
       queries.add(`${raw} staks`);
       queries.add(`${raw} imanes`);
-      queries.add(`${raw} coleccion completa`);
-      queries.add(`${raw} colección completa`);
-      queries.add(`${raw} album completo`);
-      queries.add(`${raw} álbum completo`);
-      queries.add(`${raw} 260/260`);
+
+      if (isCompleteCompletenessValue(completeness)) {
+        queries.add(`${raw} coleccion completa`);
+        queries.add(`${raw} colección completa`);
+        queries.add(`${raw} album completo`);
+        queries.add(`${raw} álbum completo`);
+        queries.add(`${raw} 260/260`);
+      }
+
+      if (isEmptyOrIncompleteCompletenessValue(completeness)) {
+        queries.add(`${raw} album`);
+        queries.add(`${raw} álbum`);
+        queries.add(`${raw} album vacio`);
+        queries.add(`${raw} álbum vacío`);
+      }
     }
 
     if (platform === "album") {
       queries.add(`${raw} album`);
       queries.add(`${raw} álbum`);
+      queries.add(`${raw} album vacio`);
+      queries.add(`${raw} álbum vacío`);
     }
 
     if (platform === "gachapon") {
@@ -319,6 +332,10 @@ function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
       return passesTazoCandidateValidation(item, title);
     }
 
+    if (category === "merch" && platform === "album") {
+      return passesAlbumCandidateValidation(item, title);
+    }
+
     if (category !== "magazine" && category !== "merch" && hasEditionConflict(wanted, title)) {
       return false;
     }
@@ -413,6 +430,21 @@ function pickBestCandidate(
       if (tazoPenalty > 0) {
         score -= tazoPenalty;
         reasons.push(`tazo-penalty:${tazoPenalty.toFixed(2)}`);
+      }
+    }
+
+    if (category === "merch" && platform === "album") {
+      const albumBoost = getAlbumBoost(item, title);
+      const albumPenalty = getAlbumPenalty(item, title);
+
+      if (albumBoost > 0) {
+        score += albumBoost;
+        reasons.push(`album-boost:${albumBoost.toFixed(2)}`);
+      }
+
+      if (albumPenalty > 0) {
+        score -= albumPenalty;
+        reasons.push(`album-penalty:${albumPenalty.toFixed(2)}`);
       }
     }
 
@@ -541,6 +573,12 @@ async function buildResult(
     }
   }
 
+  if (category === "merch" && platform === "album") {
+    if (!passesAlbumCandidateValidation(item, normalizedMatchedTitle)) {
+      return null;
+    }
+  }
+
   if (
     category !== "magazine" &&
     category !== "merch" &&
@@ -583,6 +621,10 @@ async function buildResult(
       tazoCollectionMode:
         category === "merch" && platform === "tazo"
           ? getTazoCollectionMode(item, normalizedMatchedTitle)
+          : null,
+      albumMode:
+        category === "merch" && platform === "album"
+          ? getAlbumMode(item, normalizedMatchedTitle)
           : null,
       priceRole: "listing",
       liquidity: "low"
@@ -796,7 +838,10 @@ function passesCategoryValidation(item: Item, title: string): boolean {
       ]);
     }
 
-    if (platform === "album") return hasAny(title, ["album", "álbum"]);
+    if (platform === "album") {
+      return hasAny(title, ["album", "álbum"]);
+    }
+
     if (platform === "gachapon") return hasAny(title, ["gachapon", "gashapon"]);
   }
 
@@ -895,7 +940,7 @@ function passesStackCandidateValidation(item: Item, title: string): boolean {
 
   if (!hasAny(candidate, ["pokemon", "pokémon"])) return false;
 
-  if (!hasAny(candidate, ["stack", "stacks", "staks", "iman", "imán", "imanes"])) {
+  if (!hasAny(candidate, ["stack", "stacks", "staks", "iman", "imán", "imanes", "album", "álbum"])) {
     return false;
   }
 
@@ -940,6 +985,39 @@ function passesTazoCandidateValidation(item: Item, title: string): boolean {
   }
 
   if (hasTazoWrongProductFamilySignals(candidate)) {
+    return false;
+  }
+
+  return true;
+}
+
+function passesAlbumCandidateValidation(item: Item, title: string): boolean {
+  const wanted = normalizeSearchText(item.name);
+  const candidate = normalizeSearchText(title);
+
+  if (!hasAny(candidate, ["album", "álbum"])) return false;
+
+  if (wanted.includes("pokemon") && !hasAny(candidate, ["pokemon", "pokémon"])) {
+    return false;
+  }
+
+  if (wanted.includes("staks") || wanted.includes("stack")) {
+    if (!hasAny(candidate, ["staks", "stack", "stacks"])) return false;
+  }
+
+  if (wanted.includes("johto") && !candidate.includes("johto")) {
+    return false;
+  }
+
+  if (isCompleteCollectionItem(item)) {
+    return hasCompleteCollectionSignals(candidate);
+  }
+
+  if (isAlbumOnlyItem(item)) {
+    return !hasCompleteCollectionSignals(candidate);
+  }
+
+  if (!isCompleteCollectionItem(item) && hasCompleteCollectionSignals(candidate)) {
     return false;
   }
 
@@ -1042,23 +1120,63 @@ function getTazoCollectionMode(item: Item, title: string): string {
   return "unknown";
 }
 
+function getAlbumBoost(item: Item, title: string): number {
+  let boost = 0;
+
+  if (hasAlbumSignals(title)) boost += 0.35;
+  if (title.includes("vacio") || title.includes("vacío")) boost += 0.45;
+  if (title.includes("pokemon") || title.includes("pokémon")) boost += 0.15;
+  if (title.includes("johto")) boost += 0.15;
+  if (hasAny(title, ["staks", "stack", "stacks"])) boost += 0.15;
+  if (title.includes("panini")) boost += 0.1;
+
+  if (isCompleteCollectionItem(item) && hasCompleteCollectionSignals(title)) {
+    boost += 0.8;
+  }
+
+  return Math.min(1.5, boost);
+}
+
+function getAlbumPenalty(item: Item, title: string): number {
+  let penalty = 0;
+
+  if (isAlbumOnlyItem(item) && hasCompleteCollectionSignals(title)) {
+    penalty += 1.4;
+  }
+
+  if (hasSingleStackSignals(title)) {
+    penalty += 0.7;
+  }
+
+  if (hasAny(title, ["portadas", "sobre vacio", "sobre vacío", "normas", "mapa", "folleto"])) {
+    penalty += 0.65;
+  }
+
+  return Math.min(2.0, penalty);
+}
+
+function getAlbumMode(item: Item, title: string): string {
+  if (isAlbumOnlyItem(item) && !hasCompleteCollectionSignals(title)) {
+    return "empty_album";
+  }
+
+  if (isCompleteCollectionItem(item) && hasCompleteCollectionSignals(title)) {
+    return "complete_album_collection";
+  }
+
+  if (hasAlbumSignals(title)) {
+    return "album";
+  }
+
+  return "unknown";
+}
+
 function isCompleteCollectionItem(item: Item): boolean {
   const text = normalizeSearchText(
     `${item.name} ${item.platform ?? ""} ${item.completeness ?? ""} ${item.notes ?? ""}`
   );
 
-  if (
-    hasAny(text, [
-      "incomplete",
-      "incompleto",
-      "incompleta",
-      "partial",
-      "parcial",
-      "loose",
-      "suelto",
-      "suelta"
-    ])
-  ) {
+  if (isEmptyOrIncompleteCompletenessValue(text)) {
     return false;
   }
 
@@ -1086,7 +1204,47 @@ function isAlbumOnlyItem(item: Item): boolean {
     "álbum",
     "vacio",
     "vacío",
-    "empty album"
+    "empty album",
+    "empty",
+    "incomplete",
+    "incompleto",
+    "incompleta"
+  ]);
+}
+
+function isCompleteCompletenessValue(value: string): boolean {
+  const normalized = normalizeSearchText(value);
+
+  if (!normalized) return false;
+  if (isEmptyOrIncompleteCompletenessValue(normalized)) return false;
+
+  return hasAny(normalized, [
+    "complete",
+    "completed",
+    "completo",
+    "completa",
+    "coleccion completa",
+    "colección completa",
+    "full set",
+    "set completo"
+  ]);
+}
+
+function isEmptyOrIncompleteCompletenessValue(value: string): boolean {
+  const normalized = normalizeSearchText(value);
+
+  return hasAny(normalized, [
+    "incomplete",
+    "incompleto",
+    "incompleta",
+    "partial",
+    "parcial",
+    "loose",
+    "suelto",
+    "suelta",
+    "empty",
+    "vacio",
+    "vacío"
   ]);
 }
 
@@ -1542,6 +1700,16 @@ function computeConfidence(item: Item, matchedTitle: string): number {
 
     if (!isCompleteCollectionItem(item) && hasSingleTazoSignals(matched)) {
       confidence += 0.08;
+    }
+  }
+
+  if (category === "merch" && platform === "album") {
+    if (isAlbumOnlyItem(item) && hasAlbumSignals(matched)) {
+      confidence += 0.14;
+    }
+
+    if (isAlbumOnlyItem(item) && hasCompleteCollectionSignals(matched)) {
+      confidence -= 0.35;
     }
   }
 
@@ -2035,7 +2203,7 @@ function getPlatformWords(platform: string | null): string[] {
 }
 
 function hasAny(value: string, tokens: string[]): boolean {
-  return tokens.some((token) => value.includes(token));
+  return tokens.some((token) => value.includes(normalizeSearchText(token)));
 }
 
 function looksLikeProductUrl(url: string): boolean {
