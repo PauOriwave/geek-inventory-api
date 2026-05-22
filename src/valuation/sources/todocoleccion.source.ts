@@ -175,7 +175,11 @@ function buildQueries(item: Item): string[] {
         queries.add(`${raw} 260/260`);
       }
 
-      if (isEmptyOrIncompleteCompletenessValue(completeness)) {
+      if (
+        isEmptyOrIncompleteCompletenessValue(completeness) ||
+        normalized.includes("album") ||
+        normalized.includes("álbum")
+      ) {
         queries.add(`${raw} album`);
         queries.add(`${raw} álbum`);
         queries.add(`${raw} album vacio`);
@@ -1204,8 +1208,6 @@ function isAlbumOnlyItem(item: Item): boolean {
     "álbum",
     "vacio",
     "vacío",
-    "empty album",
-    "empty",
     "incomplete",
     "incompleto",
     "incompleta"
@@ -1242,7 +1244,6 @@ function isEmptyOrIncompleteCompletenessValue(value: string): boolean {
     "loose",
     "suelto",
     "suelta",
-    "empty",
     "vacio",
     "vacío"
   ]);
