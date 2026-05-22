@@ -107,7 +107,7 @@ function buildQueries(item: Item): string[] {
   const raw = clean(item.name);
   const normalized = normalizeSearchText(raw);
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
   const completeness = normalizeSearchText(item.completeness ?? "");
 
   const queries = new Set<string>();
@@ -312,7 +312,7 @@ function addCandidate(input: {
 function filterCandidates(item: Item, candidates: Candidate[]): Candidate[] {
   const wanted = normalizeSearchText(item.name);
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
   const tokens = getImportantTokens(wanted, item);
 
   if (tokens.length === 0) return [];
@@ -366,7 +366,7 @@ function pickBestCandidate(
 
   const wanted = normalizeSearchText(item.name);
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
 
   const scored: ScoredCandidate[] = candidates.map((candidate) => {
     const title = normalizeSearchText(candidate.title);
@@ -555,7 +555,7 @@ async function buildResult(
   const matchedTitle = detail?.title || candidate.title;
   const normalizedMatchedTitle = normalizeSearchText(matchedTitle);
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
 
   if (hasDisallowedMagazineVariant(item, normalizedMatchedTitle)) {
     return null;
@@ -615,6 +615,7 @@ async function buildResult(
       url: candidate.url,
       category: item.category,
       platform: item.platform ?? null,
+      normalizedPlatform: platform,
       completeness: item.completeness ?? null,
       region: item.region ?? null,
       magazineIssue: extractMagazineIssue(item.name),
@@ -788,7 +789,7 @@ function getImportantTokens(
 
 function passesCategoryValidation(item: Item, title: string): boolean {
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
 
   if (category === "guide") {
     if (platform === "officialguide" || platform === "guide") {
@@ -1592,7 +1593,7 @@ function hasNarrativeSignals(title: string): boolean {
 
 function getCategoryBoost(item: Item, normalizedTitle: string): number {
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
 
   if (category === "guide") {
     if (hasPremiumGuideSignal(normalizedTitle)) return 0.28;
@@ -1658,7 +1659,7 @@ function computeConfidence(item: Item, matchedTitle: string): number {
   const wanted = normalizeSearchText(item.name);
   const matched = normalizeSearchText(matchedTitle);
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
 
   let confidence = 0.42 + similarityScore(wanted, matched) * 0.42;
 
@@ -2104,7 +2105,7 @@ function isUnreliableOfficialGuideCandidate(
   candidate: Candidate
 ): boolean {
   const category = normalizeCategory(item.category);
-  const platform = normalizePlatform(item.platform);
+  const platform = normalizeItemPlatform(item);
 
   if (category !== "guide") return false;
 
@@ -2148,6 +2149,25 @@ function normalizeCategory(value: string | null): string {
   return normalized;
 }
 
+function normalizeItemPlatform(item: Item): string {
+  const name = normalizeSearchText(item.name);
+  const platform = normalizePlatform(item.platform);
+
+  if (name.includes("album") || name.includes("álbum")) {
+    return "album";
+  }
+
+  if (
+    name.includes("staks") ||
+    name.includes("stack") ||
+    name.includes("stacks")
+  ) {
+    return "stack";
+  }
+
+  return platform;
+}
+
 function normalizePlatform(value: string | null): string {
   const normalized = normalizeText(value || "")
     .replace(/\s+/g, "")
@@ -2165,6 +2185,10 @@ function normalizePlatform(value: string | null): string {
     return "magazine";
   }
 
+  if (normalized.includes("album") || normalized.includes("álbum")) {
+    return "album";
+  }
+
   if (normalized.includes("tazo")) return "tazo";
 
   if (
@@ -2174,10 +2198,6 @@ function normalizePlatform(value: string | null): string {
     normalized.includes("imán")
   ) {
     return "stack";
-  }
-
-  if (normalized.includes("album") || normalized.includes("álbum")) {
-    return "album";
   }
 
   if (normalized.includes("gachapon") || normalized.includes("gashapon")) {
