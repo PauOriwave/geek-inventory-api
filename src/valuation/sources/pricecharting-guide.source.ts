@@ -8,15 +8,23 @@ import {
 
 import { ScraperSourceResult } from "../scraper.types";
 
+type PriceKind =
+  | "complete"
+  | "itemAndManual"
+  | "itemAndBox"
+  | "loose"
+  | "market";
+
 type Candidate = {
   title: string;
   price: number | null;
   url: string;
+  priceKind?: PriceKind;
   metadata?: Record<string, unknown>;
 };
 
 const BASE_URL = "https://www.pricecharting.com";
-const MIN_RELIABLE_GUIDE_PRICE_USD = 12;
+const MIN_LOW_CONFIDENCE_GUIDE_PRICE_USD = 12;
 
 export async function getPriceChartingGuidePrice(
   item: Item
@@ -46,11 +54,12 @@ export async function getPriceChartingGuidePrice(
       continue;
     }
 
-    if (!isReliableGuidePrice(detail.price)) {
-      console.log("📘 PriceCharting Guide direct rejected low price:", {
+    if (!isReliableGuidePrice(detail.price, detail.priceKind)) {
+      console.log("📘 PriceCharting Guide direct rejected weak low price:", {
         wanted: item.name,
         matchedTitle: detail.title,
         price: detail.price,
+        priceKind: detail.priceKind,
         url: directUrl
       });
 
@@ -67,14 +76,12 @@ export async function getPriceChartingGuidePrice(
       continue;
     }
 
-    const confidence = computeConfidence(
-      item,
-      detail.title
-    );
+    const confidence = computeConfidence(item, detail.title);
 
     console.log("📘 PriceCharting Guide direct selected:", {
       title: detail.title,
       price: detail.price,
+      priceKind: detail.priceKind,
       confidence,
       url: directUrl
     });
@@ -91,6 +98,7 @@ export async function getPriceChartingGuidePrice(
         provider: "pricecharting",
         mode: "direct",
         url: directUrl,
+        priceKind: detail.priceKind,
         prices: detail.metadata ?? {}
       }
     };
@@ -115,6 +123,7 @@ export async function getPriceChartingGuidePrice(
       candidates.map((candidate) => ({
         title: candidate.title,
         price: candidate.price,
+        priceKind: candidate.priceKind,
         url: candidate.url
       }))
     );
@@ -125,25 +134,24 @@ export async function getPriceChartingGuidePrice(
 
     if (!best) continue;
 
-    if (!isReliableGuidePrice(best.price)) {
-      console.log("📘 PriceCharting Guide rejected low search price:", {
+    if (!isReliableGuidePrice(best.price, best.priceKind)) {
+      console.log("📘 PriceCharting Guide rejected weak low search price:", {
         wanted: item.name,
         matchedTitle: best.title,
         price: best.price,
+        priceKind: best.priceKind,
         url: best.url
       });
 
       continue;
     }
 
-    const confidence = computeConfidence(
-      item,
-      best.title
-    );
+    const confidence = computeConfidence(item, best.title);
 
     console.log("📘 PriceCharting Guide selected:", {
       title: best.title,
       price: best.price,
+      priceKind: best.priceKind,
       confidence
     });
 
@@ -159,6 +167,7 @@ export async function getPriceChartingGuidePrice(
         provider: "pricecharting",
         mode: "search",
         url: best.url,
+        priceKind: best.priceKind,
         ...(best.metadata ?? {})
       }
     };
@@ -240,27 +249,81 @@ function extractDirectDetail(
     parsePriceFromPriceGuideRow($, "Item & Box") ??
     parsePriceFromLabel(html, "Item & Box");
 
-  const price =
-    completePrice ??
-    itemAndManualPrice ??
-    itemAndBoxPrice ??
-    loosePrice ??
-    extractFirstMarketPrice(html);
+  const marketPrice = extractFirstMarketPrice(html);
 
-  if (!title || !price || price <= 0) {
+  const selected = selectBestGuidePrice({
+    completePrice,
+    itemAndManualPrice,
+    itemAndBoxPrice,
+    loosePrice,
+    marketPrice
+  });
+
+  if (!title || !selected.price || selected.price <= 0) {
     return null;
   }
 
   return {
     title,
-    price,
+    price: selected.price,
+    priceKind: selected.priceKind,
     url,
     metadata: {
       loosePrice,
       itemAndBoxPrice,
       itemAndManualPrice,
-      completePrice
+      completePrice,
+      marketPrice,
+      selectedPriceKind: selected.priceKind
     }
+  };
+}
+
+function selectBestGuidePrice(input: {
+  completePrice: number | null;
+  itemAndManualPrice: number | null;
+  itemAndBoxPrice: number | null;
+  loosePrice: number | null;
+  marketPrice: number | null;
+}): { price: number | null; priceKind: PriceKind | undefined } {
+  if (input.completePrice && input.completePrice > 0) {
+    return {
+      price: input.completePrice,
+      priceKind: "complete"
+    };
+  }
+
+  if (input.itemAndManualPrice && input.itemAndManualPrice > 0) {
+    return {
+      price: input.itemAndManualPrice,
+      priceKind: "itemAndManual"
+    };
+  }
+
+  if (input.itemAndBoxPrice && input.itemAndBoxPrice > 0) {
+    return {
+      price: input.itemAndBoxPrice,
+      priceKind: "itemAndBox"
+    };
+  }
+
+  if (input.loosePrice && input.loosePrice > 0) {
+    return {
+      price: input.loosePrice,
+      priceKind: "loose"
+    };
+  }
+
+  if (input.marketPrice && input.marketPrice > 0) {
+    return {
+      price: input.marketPrice,
+      priceKind: "market"
+    };
+  }
+
+  return {
+    price: null,
+    priceKind: undefined
   };
 }
 
@@ -289,6 +352,7 @@ function extractCandidates(html: string): Candidate[] {
     candidates.push({
       title,
       price,
+      priceKind: "market",
       url: absolutize(href)
     });
   });
@@ -326,6 +390,7 @@ function extractCandidates(html: string): Candidate[] {
     candidates.push({
       title,
       price,
+      priceKind: "market",
       url
     });
   });
@@ -352,7 +417,7 @@ function filterCandidates(
     const title = normalizeSearchText(candidate.title);
     const candidateEdition = extractSagaEdition(title);
 
-    if (!isReliableGuidePrice(candidate.price)) {
+    if (!isReliableGuidePrice(candidate.price, candidate.priceKind)) {
       return false;
     }
 
@@ -447,6 +512,18 @@ function pickBestCandidate(
       score += 0.05;
     }
 
+    if (candidate.priceKind === "complete") {
+      score += 0.15;
+    }
+
+    if (candidate.priceKind === "itemAndManual") {
+      score += 0.1;
+    }
+
+    if (candidate.priceKind === "loose" || candidate.priceKind === "market") {
+      score -= 0.05;
+    }
+
     return {
       candidate,
       score
@@ -460,7 +537,8 @@ function pickBestCandidate(
     scored.slice(0, 5).map((entry) => ({
       title: entry.candidate.title,
       score: Number(entry.score.toFixed(2)),
-      price: entry.candidate.price
+      price: entry.candidate.price,
+      priceKind: entry.candidate.priceKind
     }))
   );
 
@@ -566,8 +644,22 @@ function isReliableDirectMatch(
   return similarityScore(wanted, matched) >= 0.45 || matched.includes(wanted);
 }
 
-function isReliableGuidePrice(price: number | null | undefined): boolean {
-  return typeof price === "number" && price >= MIN_RELIABLE_GUIDE_PRICE_USD;
+function isReliableGuidePrice(
+  price: number | null | undefined,
+  priceKind?: PriceKind
+): boolean {
+  if (typeof price !== "number" || price <= 0) {
+    return false;
+  }
+
+  if (
+    (priceKind === "loose" || priceKind === "market" || !priceKind) &&
+    price < MIN_LOW_CONFIDENCE_GUIDE_PRICE_USD
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 async function fetchHtml(
