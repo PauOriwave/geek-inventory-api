@@ -24,7 +24,7 @@ type Candidate = {
 };
 
 const BASE_URL = "https://www.pricecharting.com";
-const MIN_WEAK_GUIDE_PRICE_USD = 12;
+const MIN_WEAK_GUIDE_PRICE_USD = 1.5;
 const MIN_DIRECT_MATCH_SCORE = 0.48;
 const MIN_SEARCH_MATCH_SCORE = 0.55;
 
