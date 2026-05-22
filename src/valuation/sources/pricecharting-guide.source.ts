@@ -212,11 +212,20 @@ export async function getPriceChartingGuidePrice(
 
 function buildDirectProductUrls(item: Item): string[] {
   const canonical = buildCanonicalGuideName(item.name);
+  const publisher = detectGuidePublisher(item.name, item.platform);
 
   const slugs = new Set<string>();
 
   if (canonical) {
     slugs.add(canonical);
+
+    if (publisher && !canonical.includes(publisher.replace(/\s+/g, "-"))) {
+      slugs.add(`${canonical}-${publisher.replace(/\s+/g, "-")}`);
+    }
+
+    if (!canonical.includes("official-strategy-guide")) {
+      slugs.add(`${canonical}-official-strategy-guide`);
+    }
   }
 
   return [...slugs].map((slug) => `${BASE_URL}/game/strategy-guide/${slug}`);
@@ -351,6 +360,7 @@ function extractCandidates(html: string): Candidate[] {
 
     const priceText =
       row.find("td.js-price").first().text().trim() ||
+      row.find("td.price").first().text().trim() ||
       row.text();
 
     const price = parsePrice(priceText);
@@ -377,6 +387,7 @@ function extractCandidates(html: string): Candidate[] {
 
     const priceText =
       root.find(".js-price").first().text().trim() ||
+      root.find(".price").first().text().trim() ||
       root.text();
 
     const price = parsePrice(priceText);
@@ -575,7 +586,8 @@ function computeConfidence(
   if (priceKind === "complete") confidence += 0.06;
   if (priceKind === "itemAndManual") confidence += 0.04;
   if (priceKind === "itemAndBox") confidence += 0.03;
-  if (priceKind === "loose" || priceKind === "market") confidence -= 0.03;
+  if (priceKind === "loose") confidence -= 0.03;
+  if (priceKind === "market") confidence -= 0.06;
 
   if (hasDuplicatedPublisherSignal(normalizeSearchText(matchedTitle))) {
     confidence -= 0.12;
@@ -788,11 +800,34 @@ function parsePriceFromPriceGuideRow(
     if (found != null) return;
 
     const row = $(el);
-    const text = row.text().replace(/\s+/g, " ").trim();
+    const cells = row.find("td, th");
 
-    if (!text.toLowerCase().includes(label.toLowerCase())) return;
+    const labelCellText = cells.first().text().replace(/\s+/g, " ").trim();
+    const rowText = row.text().replace(/\s+/g, " ").trim();
 
-    found = parsePrice(text);
+    if (
+      !labelCellText.toLowerCase().includes(label.toLowerCase()) &&
+      !rowText.toLowerCase().includes(label.toLowerCase())
+    ) {
+      return;
+    }
+
+    const priceCellTexts = cells
+      .toArray()
+      .slice(1)
+      .map((cell) => $(cell).text().replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    for (const cellText of priceCellTexts) {
+      const price = parsePrice(cellText);
+
+      if (price && price > 0) {
+        found = price;
+        return;
+      }
+    }
+
+    found = parsePrice(rowText);
   });
 
   return found;
