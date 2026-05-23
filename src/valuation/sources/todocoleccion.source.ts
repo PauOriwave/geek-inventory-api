@@ -218,13 +218,11 @@ function extractCandidates(html: string): Candidate[] {
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
 
-  $("article, .tc-item, .item-card, .products-item").each((_, el) => {
-    const root = $(el);
-
+  const addFromRoot = (root: cheerio.Cheerio<any>) => {
     const href =
+      root.find("a[href*='~x']").first().attr("href") ||
       root.find("a[href*='/lote/']").first().attr("href") ||
       root.find("a[href*='todocoleccion.net']").first().attr("href") ||
-      root.find("a[href]").first().attr("href") ||
       "";
 
     const url = absolutize(href);
@@ -234,13 +232,15 @@ function extractCandidates(html: string): Candidate[] {
       root.find("h2, h3, h4").first().text().trim() ||
       root.find("a[title]").first().attr("title")?.trim() ||
       root.find("img[alt]").first().attr("alt")?.trim() ||
-      root.find("a[href]").first().text().trim() ||
+      root.find("a[href*='~x']").first().text().trim() ||
+      root.find("a[href*='/lote/']").first().text().trim() ||
       titleFromUrl(url);
 
     const priceText =
       root.find("[class*='price']").first().text().trim() ||
       root.find("[class*='precio']").first().text().trim() ||
-      root.text();
+      root.find("[data-price]").first().attr("data-price") ||
+      "";
 
     addCandidate({
       title,
@@ -249,7 +249,44 @@ function extractCandidates(html: string): Candidate[] {
       candidates,
       seen
     });
+  };
+
+  $("article, .tc-item, .item-card, .products-item, li").each((_, el) => {
+    addFromRoot($(el));
   });
+
+  if (candidates.length === 0) {
+    $("a[href*='~x'], a[href*='/lote/']").each((_, el) => {
+      const link = $(el);
+      const href = link.attr("href") || "";
+      const url = absolutize(href);
+
+      if (!looksLikeProductUrl(url)) return;
+
+      const root = link.closest("article, li, .tc-item, .item-card, .products-item");
+
+      const title =
+        link.attr("title")?.trim() ||
+        link.text().trim() ||
+        link.find("img").attr("alt")?.trim() ||
+        root.find("h2, h3, h4").first().text().trim() ||
+        titleFromUrl(url);
+
+      const priceText =
+        root.find("[class*='price']").first().text().trim() ||
+        root.find("[class*='precio']").first().text().trim() ||
+        root.find("[data-price]").first().attr("data-price") ||
+        "";
+
+      addCandidate({
+        title,
+        href: url,
+        priceText,
+        candidates,
+        seen
+      });
+    });
+  }
 
   return candidates;
 }
