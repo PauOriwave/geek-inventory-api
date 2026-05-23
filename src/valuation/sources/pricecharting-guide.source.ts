@@ -324,24 +324,51 @@ function selectBestGuidePrice(input: {
   loosePrice: number | null;
   marketPrice: number | null;
 }): { price: number | null; priceKind: PriceKind | undefined } {
-  if (input.completePrice && input.completePrice > 0) {
+  const suspiciousComplete =
+    input.completePrice &&
+    input.marketPrice &&
+    input.completePrice < input.marketPrice * 0.2;
+
+  const suspiciousItemAndManual =
+    input.itemAndManualPrice &&
+    input.marketPrice &&
+    input.itemAndManualPrice < input.marketPrice * 0.2;
+
+  const suspiciousItemAndBox =
+    input.itemAndBoxPrice &&
+    input.marketPrice &&
+    input.itemAndBoxPrice < input.marketPrice * 0.2;
+
+  if (
+    input.completePrice &&
+    input.completePrice > 0 &&
+    !suspiciousComplete
+  ) {
     return { price: input.completePrice, priceKind: "complete" };
   }
 
-  if (input.itemAndManualPrice && input.itemAndManualPrice > 0) {
+  if (
+    input.itemAndManualPrice &&
+    input.itemAndManualPrice > 0 &&
+    !suspiciousItemAndManual
+  ) {
     return { price: input.itemAndManualPrice, priceKind: "itemAndManual" };
   }
 
-  if (input.itemAndBoxPrice && input.itemAndBoxPrice > 0) {
+  if (
+    input.itemAndBoxPrice &&
+    input.itemAndBoxPrice > 0 &&
+    !suspiciousItemAndBox
+  ) {
     return { price: input.itemAndBoxPrice, priceKind: "itemAndBox" };
-  }
-
-  if (input.loosePrice && input.loosePrice > 0) {
-    return { price: input.loosePrice, priceKind: "loose" };
   }
 
   if (input.marketPrice && input.marketPrice > 0) {
     return { price: input.marketPrice, priceKind: "market" };
+  }
+
+  if (input.loosePrice && input.loosePrice > 0) {
+    return { price: input.loosePrice, priceKind: "loose" };
   }
 
   return { price: null, priceKind: undefined };
