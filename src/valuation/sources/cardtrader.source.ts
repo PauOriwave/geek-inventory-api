@@ -10,7 +10,7 @@ type ParsedTcgQuery = {
   cleanName: string;
   platform: string | null;
   setCode: string | null;
-  setName: string | null;
+  setName: string | null;   
   cardNumber: string | null;
 };
 
